@@ -1,0 +1,112 @@
+{
+  "name": "klein-sdk",
+  "version": "0.1.0",
+  "description": "Framework-independent SDK for Klein classroom math tools.",
+  "keywords": [
+    "math",
+    "geometry",
+    "whiteboard",
+    "graphing",
+    "sdk"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "apps",
+    "integrations",
+    "GEOMETRY_LAB_ROADMAP.md",
+    "KLEIN_SDK_PLAN.md",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./math": {
+      "types": "./dist/math/index.d.ts",
+      "import": "./dist/math/index.js"
+    },
+    "./geometry-core": {
+      "types": "./dist/geometry-core/index.d.ts",
+      "import": "./dist/geometry-core/index.js"
+    },
+    "./whiteboard": {
+      "types": "./dist/whiteboard/index.d.ts",
+      "import": "./dist/whiteboard/index.js"
+    },
+    "./geometry": {
+      "types": "./dist/geometry/index.d.ts",
+      "import": "./dist/geometry/index.js"
+    },
+    "./geometry-lab": {
+      "types": "./dist/geometry-lab/index.d.ts",
+      "import": "./dist/geometry-lab/index.js"
+    },
+    "./graphing": {
+      "types": "./dist/graphing/index.d.ts",
+      "import": "./dist/graphing/index.js"
+    },
+    "./algebra": {
+      "types": "./dist/algebra/index.d.ts",
+      "import": "./dist/algebra/index.js"
+    },
+    "./calculator": {
+      "types": "./dist/calculator/index.d.ts",
+      "import": "./dist/calculator/index.js"
+    },
+    "./probability": {
+      "types": "./dist/probability/index.d.ts",
+      "import": "./dist/probability/index.js"
+    },
+    "./spreadsheet": {
+      "types": "./dist/spreadsheet/index.d.ts",
+      "import": "./dist/spreadsheet/index.js"
+    },
+    "./workspace": {
+      "types": "./dist/workspace/index.d.ts",
+      "import": "./dist/workspace/index.js"
+    },
+    "./collab": {
+      "types": "./dist/collab/index.d.ts",
+      "import": "./dist/collab/index.js"
+    },
+    "./dom": {
+      "types": "./dist/dom/index.d.ts",
+      "import": "./dist/dom/index.js"
+    },
+    "./embed": {
+      "types": "./dist/embed/index.d.ts",
+      "import": "./dist/embed/index.js"
+    },
+    "./integrations": {
+      "types": "./dist/integrations/index.d.ts",
+      "import": "./dist/integrations/index.js"
+    },
+    "./integrations/teams": {
+      "types": "./dist/integrations/teams/index.d.ts",
+      "import": "./dist/integrations/teams/index.js"
+    },
+    "./integrations/google-classroom": {
+      "types": "./dist/integrations/google-classroom/index.d.ts",
+      "import": "./dist/integrations/google-classroom/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run typecheck",
+    "pack:local": "npm pack"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

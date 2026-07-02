@@ -1,0 +1,7 @@
+{
+  "attachmentDiscoveryUri": "https://example.com/integrations/google-classroom/attachment-discovery",
+  "teacherViewUri": "https://example.com/integrations/google-classroom/teacher-view",
+  "studentViewUri": "https://example.com/integrations/google-classroom/student-view",
+  "studentWorkReviewUri": "https://example.com/integrations/google-classroom/student-work-review",
+  "linkUpgradeUri": "https://example.com/integrations/google-classroom/link-upgrade"
+}

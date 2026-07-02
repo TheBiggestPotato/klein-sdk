@@ -1,0 +1,42 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.29/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.29",
+  "version": "0.1.0",
+  "id": "00000000-0000-0000-0000-000000000000",
+  "developer": {
+    "name": "Klein",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "name": {
+    "short": "Klein Tools",
+    "full": "Klein Math Tools"
+  },
+  "description": {
+    "short": "Interactive math tools for classrooms.",
+    "full": "Klein Math Tools provides embeddable whiteboard, geometry, graphing, algebra, and calculator activities."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#2563eb",
+  "staticTabs": [
+    {
+      "entityId": "klein-tools-home",
+      "name": "Klein Tools",
+      "contentUrl": "https://example.com/integrations/teams/personal",
+      "websiteUrl": "https://example.com",
+      "scopes": ["personal"]
+    }
+  ],
+  "configurableTabs": [
+    {
+      "configurationUrl": "https://example.com/integrations/teams/config",
+      "canUpdateConfiguration": true,
+      "scopes": ["team", "groupchat"]
+    }
+  ],
+  "validDomains": ["example.com"]
+}
