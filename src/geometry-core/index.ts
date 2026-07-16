@@ -48,6 +48,17 @@ export interface GeometryLineEquation {
   input?: string;
 }
 
+/** General implicit 2D conic equation: `a*x^2 + b*x*y + c*y^2 + d*x + e*y + f = 0`. */
+export interface GeometryConicEquation {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+  input?: string;
+}
+
 /** Normalized implicit 3D plane equation: `a * x + b * y + c * z + d = 0`. */
 export interface GeometryPlaneEquation3D {
   a: number;
@@ -86,9 +97,12 @@ export type GeometryEntity =
   | PolygonEntity
   | CircleEntity
   | ArcEntity
+  | ConicEntity
+  | ParametricCurveEntity
   | AngleEntity
   | PlaneEntity
-  | LocusEntity;
+  | LocusEntity
+  | GeometryRelationMarkerEntity;
 
 /** Finite segment between two points. */
 export interface SegmentEntity extends GeometryEntityDisplay {
@@ -143,12 +157,41 @@ export interface ArcEntity extends GeometryEntityDisplay {
   endId: string;
 }
 
+/** Sampled conic curve with serializable equation metadata. */
+export interface ConicEntity extends GeometryEntityDisplay {
+  id: string;
+  kind: 'conic';
+  conicKind: 'ellipse' | 'parabola' | 'hyperbola';
+  points: Vector2[];
+  segments?: Vector2[][];
+  closed?: boolean;
+  equation?: GeometryConicEquation;
+  center?: Vector2;
+  rotationDegrees?: number;
+}
+
+/** Sampled parametric 2D curve with serializable parameter metadata. */
+export interface ParametricCurveEntity extends GeometryEntityDisplay {
+  id: string;
+  kind: 'parametricCurve';
+  points: Vector2[];
+  closed?: boolean;
+  parameter?: {
+    xExpression: string;
+    yExpression: string;
+    tMin: number;
+    tMax: number;
+    samples: number;
+  };
+}
+
 /** Angle marker defined by three point ids, with the middle point as vertex. */
 export interface AngleEntity extends GeometryEntityDisplay {
   id: string;
   kind: 'angle';
   pointIds: [string, string, string];
   radius?: number;
+  orientation?: 'interior' | 'exterior';
 }
 
 /** 3D plane defined by three non-collinear point ids. */
@@ -164,6 +207,15 @@ export interface LocusEntity extends GeometryEntityDisplay {
   kind: 'locus';
   points: Vector2[];
   closed?: boolean;
+}
+
+/** Serializable visual marker for geometric relations and checks. */
+export interface GeometryRelationMarkerEntity extends GeometryEntityDisplay {
+  id: string;
+  kind: 'relationMarker';
+  relationKind: 'congruence' | 'similarity' | 'cyclicQuadrilateral' | 'triangleType';
+  targetIds: string[];
+  text?: string;
 }
 
 /** Shared metadata for serializable object constraints. */
@@ -303,6 +355,9 @@ export function geometryEntityPointIds(entity: GeometryEntity): string[] {
     case 'arc':
       return [entity.centerId, entity.startId, entity.endId];
     case 'locus':
+    case 'conic':
+    case 'parametricCurve':
+    case 'relationMarker':
       return [];
   }
 }
@@ -348,6 +403,8 @@ export function geometryObjectDependencies(scene: GeometryScene, objectId: strin
   }
   const constructionSources = geometryConstructionSourceIds(entity.construction);
   if (constructionSources.length > 0) return constructionSources;
+
+  if (entity.kind === 'relationMarker') return uniqueStrings(entity.targetIds);
 
   return uniqueStrings([
     ...geometryEntityPointIds(entity),
@@ -536,7 +593,12 @@ export function planeEquationFrom3DPoints(
 ): GeometryPlaneEquation3D | null {
   const firstEdge = subtractVector3D(second, first);
   const secondEdge = subtractVector3D(third, first);
-  const normal = normalizeVector3D(cross3D(firstEdge, secondEdge));
+  const cross = cross3D(firstEdge, secondEdge);
+  const crossLength = Math.hypot(cross.x, cross.y, cross.z);
+  const edgeProduct = Math.hypot(firstEdge.x, firstEdge.y, firstEdge.z)
+    * Math.hypot(secondEdge.x, secondEdge.y, secondEdge.z);
+  if (!Number.isFinite(edgeProduct) || edgeProduct === 0 || crossLength <= 1e-12 * edgeProduct) return null;
+  const normal = normalizeVector3D(cross);
   if (!normal) return null;
   const d = -dot3D(normal, first);
   return { a: normal.x, b: normal.y, c: normal.z, d };
@@ -547,7 +609,7 @@ export function normalizeGeometryPlaneEquation3D(
   equation: GeometryPlaneEquation3D,
 ): GeometryPlaneEquation3D | null {
   const magnitude = Math.hypot(equation.a, equation.b, equation.c);
-  if (!Number.isFinite(magnitude) || magnitude < 1e-12 || !Number.isFinite(equation.d)) return null;
+  if (!Number.isFinite(magnitude) || magnitude === 0 || !Number.isFinite(equation.d)) return null;
   return {
     a: equation.a / magnitude,
     b: equation.b / magnitude,
@@ -1367,7 +1429,7 @@ function cross3D(first: Vector3, second: Vector3): Vector3 {
 
 function normalizeVector3D(vector: Vector3): Vector3 | null {
   const length = Math.hypot(vector.x, vector.y, vector.z);
-  if (!Number.isFinite(length) || length < 1e-12) return null;
+  if (!Number.isFinite(length) || length === 0) return null;
   return { x: vector.x / length, y: vector.y / length, z: vector.z / length };
 }
 
@@ -1415,12 +1477,18 @@ function geometryKindLabel(kind: GeometryPoint['kind'] | GeometryEntity['kind'])
       return 'Circle';
     case 'arc':
       return 'Arc';
+    case 'conic':
+      return 'Conic';
+    case 'parametricCurve':
+      return 'Parametric curve';
     case 'angle':
       return 'Angle';
     case 'plane':
       return 'Plane';
     case 'locus':
       return 'Locus';
+    case 'relationMarker':
+      return 'Relation marker';
   }
 }
 

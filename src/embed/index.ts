@@ -7,8 +7,10 @@ export type EmbeddedPlatform = 'web' | 'microsoft-teams' | 'google-classroom';
 export type EmbeddedToolKind =
   | 'whiteboard'
   | 'geometry-lab'
+  | 'graphing-3d'
   | 'geometry'
   | 'graphing'
+  | 'scientific'
   | 'algebra'
   | 'calculator'
   | 'probability'
@@ -18,10 +20,14 @@ export type EmbeddedToolKind =
 /** High-level workflow mode for iframe and hosted app launches. */
 export type EmbeddedMode =
   | 'standalone'
+  | 'classroom'
+  | 'team'
   | 'assignment-authoring'
   | 'assignment-student'
+  | 'student-work'
   | 'review'
-  | 'readonly';
+  | 'readonly'
+  | 'exam';
 
 /** Normalized launch context passed from a host app into SDK instruments. */
 export interface EmbeddedLaunchContext {
@@ -34,8 +40,21 @@ export interface EmbeddedLaunchContext {
   userId?: string;
   locale?: string;
   returnUrl?: string;
+  issuedAt?: string;
+  expiresAt?: string;
+  signature?: string;
   platformContext?: Record<string, string>;
 }
+
+export interface VerifyEmbeddedLaunchContextOptions {
+  context: EmbeddedLaunchContext;
+  verifySignature?: (context: EmbeddedLaunchContext) => boolean | Promise<boolean>;
+  now?: Date;
+}
+
+export type EmbeddedLaunchContextVerification =
+  | { ok: true; context: EmbeddedLaunchContext }
+  | { ok: false; reason: 'expired' | 'invalid-signature' };
 
 /** Inputs for building a stable iframe/deep-link URL for a hosted SDK activity. */
 export interface EmbedUrlOptions {
@@ -56,6 +75,9 @@ export function createEmbedUrl({ baseUrl, path = '/embed', context }: EmbedUrlOp
   setOptionalParam(url, 'userId', context.userId);
   setOptionalParam(url, 'locale', context.locale);
   setOptionalParam(url, 'returnUrl', context.returnUrl);
+  setOptionalParam(url, 'issuedAt', context.issuedAt);
+  setOptionalParam(url, 'expiresAt', context.expiresAt);
+  setOptionalParam(url, 'signature', context.signature);
 
   for (const [key, value] of Object.entries(context.platformContext ?? {})) {
     url.searchParams.set(`ctx.${key}`, value);
@@ -89,11 +111,31 @@ export function parseEmbedSearchParams(search: string | URLSearchParams): Embedd
   setParsedParam(context, 'userId', params.get('userId'));
   setParsedParam(context, 'locale', params.get('locale'));
   setParsedParam(context, 'returnUrl', params.get('returnUrl'));
+  setParsedParam(context, 'issuedAt', params.get('issuedAt'));
+  setParsedParam(context, 'expiresAt', params.get('expiresAt'));
+  setParsedParam(context, 'signature', params.get('signature'));
   if (Object.keys(platformContext).length > 0) {
     context.platformContext = platformContext;
   }
 
   return context;
+}
+
+export async function verifyEmbeddedLaunchContext(
+  options: VerifyEmbeddedLaunchContextOptions,
+): Promise<EmbeddedLaunchContextVerification> {
+  if (options.context.expiresAt) {
+    const expiresAt = Date.parse(options.context.expiresAt);
+    const now = options.now?.getTime() ?? Date.now();
+    if (Number.isFinite(expiresAt) && expiresAt < now) {
+      return { ok: false, reason: 'expired' };
+    }
+  }
+  if (options.verifySignature) {
+    const valid = await options.verifySignature(options.context);
+    if (!valid) return { ok: false, reason: 'invalid-signature' };
+  }
+  return { ok: true, context: options.context };
 }
 
 /** Messages the embedded SDK app may send to its containing host frame. */
@@ -103,6 +145,8 @@ export type HostBridgeMessage =
   | { type: 'klein.snapshot'; snapshot: JsonValue }
   | { type: 'klein.delta'; delta: JsonValue }
   | { type: 'klein.submit'; snapshot: JsonValue }
+  | { type: 'klein.classroom-event'; event: JsonValue }
+  | { type: 'klein.exam-event'; event: JsonValue }
   | { type: 'klein.error'; code: string; message: string };
 
 /** Minimal host bridge so iframe code can report readiness, resize, snapshots, deltas, and submit events. */
@@ -136,7 +180,7 @@ function setOptionalParam(url: URL, key: string, value: string | undefined): voi
 /** Adds parsed query params onto the context while preserving exact optional property semantics. */
 function setParsedParam(
   context: EmbeddedLaunchContext,
-  key: 'roomId' | 'assignmentId' | 'courseId' | 'userId' | 'locale' | 'returnUrl',
+  key: 'roomId' | 'assignmentId' | 'courseId' | 'userId' | 'locale' | 'returnUrl' | 'issuedAt' | 'expiresAt' | 'signature',
   value: string | null,
 ): void {
   if (value) {
@@ -157,8 +201,10 @@ function parseTool(value: string | null): EmbeddedToolKind {
   const tools: readonly EmbeddedToolKind[] = [
     'whiteboard',
     'geometry-lab',
+    'graphing-3d',
     'geometry',
     'graphing',
+    'scientific',
     'algebra',
     'calculator',
     'probability',
@@ -172,10 +218,14 @@ function parseTool(value: string | null): EmbeddedToolKind {
 function parseMode(value: string | null): EmbeddedMode {
   const modes: readonly EmbeddedMode[] = [
     'standalone',
+    'classroom',
+    'team',
     'assignment-authoring',
     'assignment-student',
+    'student-work',
     'review',
     'readonly',
+    'exam',
   ];
   return modes.includes(value as EmbeddedMode) ? (value as EmbeddedMode) : 'standalone';
 }

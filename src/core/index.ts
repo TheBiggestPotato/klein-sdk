@@ -1,7 +1,13 @@
 export { createIdFactory } from './ids.js';
 export type { IdFactory } from './ids.js';
-export { createStubInstrument } from './instrument.js';
-export type { StubInstrumentConfig } from './instrument.js';
+export {
+  createInstrumentRuntime,
+  createStubInstrument,
+} from './instrument.js';
+export type {
+  InstrumentRuntimeConfig,
+  StubInstrumentConfig,
+} from './instrument.js';
 export {
   KleinSdkError,
 } from './types.js';
@@ -17,12 +23,21 @@ export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
+  ApplyResult,
+  CommandResult,
   KleinInstrument,
+  KleinToolKey,
+  KleinToolRuntime,
   LoadOptions,
   NormalizedKeyEvent,
   NormalizedPointerEvent,
+  PolicyDecision,
+  ToolCommand,
   ToolContext,
   ToolController,
+  ToolEvent,
+  ToolEventListener,
+  Unsubscribe,
   ValidationFailure,
   ValidationIssue,
   ValidationResult,
