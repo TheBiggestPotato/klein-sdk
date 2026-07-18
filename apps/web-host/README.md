@@ -39,6 +39,6 @@ Minimum host responsibilities:
 
 The host app should use `klein-sdk/embed` to parse launch URLs and `klein-sdk/integrations/*` to generate platform URLs and manifests.
 
-The central browser boundary should be a `ToolHost` that accepts a normalized SDK `toolKey`, creates the runtime through `createKleinToolRuntime()` from `klein-sdk/tools`, and wires optional storage, collaboration, classroom, and exam adapters around that runtime. Framework components should render chrome and controls around `ToolHost`; they should not import individual calculator runtimes directly.
+The central browser boundary should be a `ToolHost` that accepts a normalized SDK `toolKey`, creates the runtime through `createKleinToolRuntime()` from `klein-sdk/tools`, and wires optional storage, collaboration, classroom, and exam adapters around that runtime. Runtime collaboration should use `bindRuntimeCollaboration`; a UI Sync action should call the binding's safe pull-style `requestSync()` rather than publishing the local snapshot. Framework components should render chrome and controls around `ToolHost`; they should not import individual calculator runtimes directly.
 
 For v0, public navigation should expose only graphing, 3D, scientific, probability/statistics, and whiteboard. CAS, spreadsheet, and classic workspace surfaces should stay hidden or clearly marked as post-v0.

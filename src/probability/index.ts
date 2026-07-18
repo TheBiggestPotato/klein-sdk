@@ -59,6 +59,8 @@ export type ProbabilityDelta =
   | { op: 'addDistribution'; distribution: DistributionModel }
   | { op: 'updateDistribution'; id: string; changes: Partial<DistributionModel> }
   | { op: 'delete'; ids: string[] }
+  | { op: 'setTool'; tool: ProbabilityTool }
+  | { op: 'setSelection'; id: string | null }
   | { op: 'batch'; deltas: ProbabilityDelta[] };
 
 /** Probability factory options layered over the common instrument options. */
@@ -123,7 +125,14 @@ export function validateProbabilityDelta(value: unknown): ValidationResult<Proba
   if (!isRecord(value)) {
     return { ok: false, issues: [{ path: '', message: 'Probability delta must be an object.' }] };
   }
-  const ops: Array<ProbabilityDelta['op']> = ['addDistribution', 'updateDistribution', 'delete', 'batch'];
+  const ops: Array<ProbabilityDelta['op']> = [
+    'addDistribution',
+    'updateDistribution',
+    'delete',
+    'setTool',
+    'setSelection',
+    'batch',
+  ];
   if (!ops.includes(value.op as ProbabilityDelta['op'])) {
     return { ok: false, issues: [{ path: 'op', message: 'Probability delta op is unsupported.' }] };
   }
@@ -153,6 +162,16 @@ export function applyProbabilityDelta(
       }
       next.scene.order = next.scene.order.filter(id => !delta.ids.includes(id));
       if (next.appState.selectedId && delta.ids.includes(next.appState.selectedId)) {
+        delete next.appState.selectedId;
+      }
+      return normalizeProbabilitySnapshot(next);
+    case 'setTool':
+      next.appState.activeTool = delta.tool;
+      return normalizeProbabilitySnapshot(next);
+    case 'setSelection':
+      if (delta.id !== null && next.scene.distributions[delta.id]) {
+        next.appState.selectedId = delta.id;
+      } else {
         delete next.appState.selectedId;
       }
       return normalizeProbabilitySnapshot(next);
@@ -228,6 +247,7 @@ class ProbabilityExplorerImpl implements ProbabilityExplorer {
 
   readonly #ids = createIdFactory();
   readonly #options: ProbabilityOptions;
+  readonly #deltaListeners = new Set<(delta: ProbabilityDelta, meta: DeltaMeta) => void>();
   #snapshot: ProbabilitySnapshot;
   #undoStack: HistoryEntry[] = [];
   #redoStack: HistoryEntry[] = [];
@@ -259,6 +279,11 @@ class ProbabilityExplorerImpl implements ProbabilityExplorer {
     return cloneSnapshot(this.#snapshot);
   }
 
+  subscribeDelta(listener: (delta: ProbabilityDelta, meta: DeltaMeta) => void): () => void {
+    this.#deltaListeners.add(listener);
+    return () => this.#deltaListeners.delete(listener);
+  }
+
   loadSnapshot(snapshot: ProbabilitySnapshot, _options?: LoadOptions): void {
     this.#snapshot = normalizeProbabilitySnapshot(snapshot);
     this.#undoStack = [];
@@ -267,10 +292,11 @@ class ProbabilityExplorerImpl implements ProbabilityExplorer {
   }
 
   applyDelta(delta: ProbabilityDelta, options: ApplyDeltaOptions = {}): void {
+    const source = options.meta?.source ?? 'remote';
     const commitOptions: { emit: boolean; source: DeltaMeta['source']; recordHistory: boolean; meta?: Partial<DeltaMeta> } = {
       emit: options.emit ?? false,
-      source: options.meta?.source ?? 'remote',
-      recordHistory: options.meta?.source !== 'history',
+      source,
+      recordHistory: source === 'local',
     };
     if (options.meta) commitOptions.meta = options.meta;
     this.commitDelta(delta, commitOptions);
@@ -303,18 +329,20 @@ class ProbabilityExplorerImpl implements ProbabilityExplorer {
   undo(): void {
     const entry = this.#undoStack.pop();
     if (!entry) return;
+    const previous = cloneSnapshot(this.#snapshot);
     this.#snapshot = cloneSnapshot(entry.before);
     this.#redoStack.push(entry);
-    this.emit({ op: 'batch', deltas: [] }, 'history');
+    this.emitSnapshotReplacement(previous, this.#snapshot, 'history');
     this.render();
   }
 
   redo(): void {
     const entry = this.#redoStack.pop();
     if (!entry) return;
+    const previous = cloneSnapshot(this.#snapshot);
     this.#snapshot = cloneSnapshot(entry.after);
     this.#undoStack.push(entry);
-    this.emit({ op: 'batch', deltas: [] }, 'history');
+    this.emitSnapshotReplacement(previous, this.#snapshot, 'history');
     this.render();
   }
 
@@ -346,7 +374,7 @@ class ProbabilityExplorerImpl implements ProbabilityExplorer {
     delta: ProbabilityDelta,
     options: { emit: boolean; source: DeltaMeta['source']; recordHistory: boolean; meta?: Partial<DeltaMeta> },
   ): void {
-    if (this.#options.readOnly) {
+    if (this.#options.readOnly && options.source !== 'remote' && options.source !== 'import') {
       throw new KleinSdkError('readonly', 'Probability explorer is read-only.');
     }
     const before = cloneSnapshot(this.#snapshot);
@@ -359,15 +387,52 @@ class ProbabilityExplorerImpl implements ProbabilityExplorer {
     this.render();
   }
 
+  private emitSnapshotReplacement(
+    previous: ProbabilitySnapshot,
+    snapshot: ProbabilitySnapshot,
+    source: DeltaMeta['source'],
+  ): void {
+    const deltas: ProbabilityDelta[] = [
+      { op: 'delete', ids: Object.keys(previous.scene.distributions) },
+    ];
+    for (const id of snapshot.scene.order) {
+      const distribution = snapshot.scene.distributions[id];
+      if (distribution) {
+        deltas.push({ op: 'addDistribution', distribution: structuredClone(distribution) });
+      }
+    }
+    deltas.push(
+      { op: 'setTool', tool: snapshot.appState.activeTool ?? 'distribution' },
+      { op: 'setSelection', id: snapshot.appState.selectedId ?? null },
+    );
+    this.emit({ op: 'batch', deltas }, source);
+  }
+
   private emit(delta: ProbabilityDelta, source: DeltaMeta['source'], meta?: Partial<DeltaMeta>): void {
-    if (!this.#options.onDelta) return;
     const eventMeta: DeltaMeta = {
       id: meta?.id ?? this.#ids.next('delta'),
       createdAt: meta?.createdAt ?? Date.now(),
       source,
     };
     if (meta?.actorId !== undefined) eventMeta.actorId = meta.actorId;
-    this.#options.onDelta(delta, eventMeta);
+    const listeners = [
+      ...(this.#options.onDelta ? [this.#options.onDelta] : []),
+      ...this.#deltaListeners,
+    ];
+    for (const listener of listeners) {
+      try {
+        listener(structuredClone(delta), { ...eventMeta });
+      } catch (error) {
+        const sdkError = error instanceof KleinSdkError
+          ? error
+          : new KleinSdkError('probability_observer_failed', error instanceof Error ? error.message : 'A probability delta observer failed.');
+        try {
+          this.#options.onError?.(sdkError);
+        } catch {
+          // Error observers are isolated from committed probability transactions.
+        }
+      }
+    }
   }
 
   private render(): void {

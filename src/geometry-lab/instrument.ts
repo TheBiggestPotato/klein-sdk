@@ -376,6 +376,7 @@ class GeometryLabInstrument implements GeometryLab {
   #ids: IdFactory;
   #snapshot: GeometryLabSnapshot;
   #options: Pick<GeometryLabOptions, 'readOnly' | 'onDelta' | 'onError'>;
+  #deltaListeners = new Set<(delta: GeometryLabDelta, meta: DeltaMeta) => void>();
   #root: HTMLElement | undefined;
   #undoStack: GeometryLabHistoryEntry[] = [];
   #redoStack: GeometryLabHistoryEntry[] = [];
@@ -485,6 +486,11 @@ class GeometryLabInstrument implements GeometryLab {
 
   getSnapshot(): GeometryLabSnapshot {
     return cloneSnapshot(this.#snapshot);
+  }
+
+  subscribeDelta(listener: (delta: GeometryLabDelta, meta: DeltaMeta) => void): () => void {
+    this.#deltaListeners.add(listener);
+    return () => this.#deltaListeners.delete(listener);
   }
 
   loadSnapshot(snapshot: GeometryLabSnapshot, options: LoadOptions = {}): void {
@@ -1420,11 +1426,16 @@ class GeometryLabInstrument implements GeometryLab {
   }
 
   #emitDelta(delta: GeometryLabDelta, meta: DeltaMeta): void {
-    if (!this.#options.onDelta) return;
-    try {
-      this.#options.onDelta(compactGeometryLabDelta(delta), { ...meta });
-    } catch (error) {
-      this.#notifyError(geometryLabSdkError(error, 'geometry_lab_observer_failed'));
+    const listeners = [
+      ...(this.#options.onDelta ? [this.#options.onDelta] : []),
+      ...this.#deltaListeners,
+    ];
+    for (const listener of listeners) {
+      try {
+        listener(compactGeometryLabDelta(delta), { ...meta });
+      } catch (error) {
+        this.#notifyError(geometryLabSdkError(error, 'geometry_lab_observer_failed'));
+      }
     }
   }
 

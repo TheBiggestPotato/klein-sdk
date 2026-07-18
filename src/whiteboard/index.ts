@@ -732,6 +732,7 @@ class DomWhiteboard implements WhiteboardInstrument {
 
   private readonly ids = createIdFactory();
   private readonly options: WhiteboardOptions;
+  private readonly deltaListeners = new Set<(delta: WhiteboardDelta, meta: DeltaMeta) => void>();
   private readonly theme: KleinToolTheme;
   private snapshot: WhiteboardSnapshot;
   private undoStack: HistoryEntry[] = [];
@@ -829,6 +830,11 @@ class DomWhiteboard implements WhiteboardInstrument {
     return cloneSnapshot(this.snapshot);
   }
 
+  subscribeDelta(listener: (delta: WhiteboardDelta, meta: DeltaMeta) => void): () => void {
+    this.deltaListeners.add(listener);
+    return () => this.deltaListeners.delete(listener);
+  }
+
   loadSnapshot(snapshot: WhiteboardSnapshot, options?: LoadOptions): void {
     const view = options?.preserveView ? this.snapshot.appState?.view : undefined;
     this.snapshot = normalizeSnapshot(snapshot, this.options);
@@ -842,7 +848,7 @@ class DomWhiteboard implements WhiteboardInstrument {
     const commitOptions: { emit: boolean; source: DeltaMeta['source']; recordHistory: boolean; meta?: Partial<DeltaMeta> } = {
       emit: options.emit ?? false,
       source: options.meta?.source ?? 'remote',
-      recordHistory: options.meta?.source !== 'history',
+      recordHistory: options.meta?.source === 'local',
     };
     if (options.meta) commitOptions.meta = options.meta;
     this.commitDelta(delta, commitOptions);
@@ -1204,7 +1210,24 @@ class DomWhiteboard implements WhiteboardInstrument {
       source,
     };
     if (meta?.actorId) deltaMeta.actorId = meta.actorId;
-    this.options.onDelta?.(cloneDelta(delta), deltaMeta);
+    const listeners = [
+      ...(this.options.onDelta ? [this.options.onDelta] : []),
+      ...this.deltaListeners,
+    ];
+    for (const listener of listeners) {
+      try {
+        listener(cloneDelta(delta), { ...deltaMeta });
+      } catch (error) {
+        const sdkError = error instanceof KleinSdkError
+          ? error
+          : new KleinSdkError('whiteboard_observer_failed', error instanceof Error ? error.message : 'A whiteboard delta observer failed.');
+        try {
+          this.options.onError?.(sdkError);
+        } catch {
+          // Error observers are isolated from committed whiteboard transactions.
+        }
+      }
+    }
   }
 
   private render(): void {

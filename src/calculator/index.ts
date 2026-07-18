@@ -61,7 +61,9 @@ export type CalculatorDelta =
   | { op: 'setMemory'; key: string; value: MathValue | null }
   | { op: 'setAngleMode'; angleMode: CalculatorAppState['angleMode'] }
   | { op: 'setOutputMode'; outputMode: CalculatorAppState['outputMode'] }
-  | { op: 'clear' };
+  | { op: 'setTool'; tool: CalculatorTool }
+  | { op: 'clear' }
+  | { op: 'batch'; deltas: CalculatorDelta[] };
 
 /** Calculator factory options layered over the common instrument options. */
 export type CalculatorOptions = InstrumentOptions<CalculatorSnapshot, CalculatorDelta>;
@@ -128,7 +130,9 @@ export function validateCalculatorDelta(value: unknown): ValidationResult<Calcul
     'setMemory',
     'setAngleMode',
     'setOutputMode',
+    'setTool',
     'clear',
+    'batch',
   ];
   if (!ops.includes(value.op as CalculatorDelta['op'])) {
     return { ok: false, issues: [{ path: 'op', message: 'Calculator delta op is unsupported.' }] };
@@ -163,10 +167,15 @@ export function applyCalculatorDelta(
     case 'setOutputMode':
       next.appState.outputMode = delta.outputMode;
       return normalizeCalculatorSnapshot(next);
+    case 'setTool':
+      next.appState.activeTool = delta.tool;
+      return normalizeCalculatorSnapshot(next);
     case 'clear':
       next.scene.entries = {};
       next.scene.order = [];
       return normalizeCalculatorSnapshot(next);
+    case 'batch':
+      return delta.deltas.reduce(applyCalculatorDelta, next);
   }
 }
 
@@ -215,6 +224,7 @@ class ScientificCalculatorImpl implements ScientificCalculator {
 
   readonly #ids = createIdFactory();
   readonly #options: CalculatorOptions;
+  readonly #deltaListeners = new Set<(delta: CalculatorDelta, meta: DeltaMeta) => void>();
   #snapshot: CalculatorSnapshot;
   #undoStack: HistoryEntry[] = [];
   #redoStack: HistoryEntry[] = [];
@@ -246,6 +256,11 @@ class ScientificCalculatorImpl implements ScientificCalculator {
     return cloneSnapshot(this.#snapshot);
   }
 
+  subscribeDelta(listener: (delta: CalculatorDelta, meta: DeltaMeta) => void): () => void {
+    this.#deltaListeners.add(listener);
+    return () => this.#deltaListeners.delete(listener);
+  }
+
   loadSnapshot(snapshot: CalculatorSnapshot, _options?: LoadOptions): void {
     this.#snapshot = normalizeCalculatorSnapshot(snapshot);
     this.#undoStack = [];
@@ -254,10 +269,11 @@ class ScientificCalculatorImpl implements ScientificCalculator {
   }
 
   applyDelta(delta: CalculatorDelta, options: ApplyDeltaOptions = {}): void {
+    const source = options.meta?.source ?? 'remote';
     const commitOptions: { emit: boolean; source: DeltaMeta['source']; recordHistory: boolean; meta?: Partial<DeltaMeta> } = {
       emit: options.emit ?? false,
-      source: options.meta?.source ?? 'remote',
-      recordHistory: options.meta?.source !== 'history',
+      source,
+      recordHistory: source === 'local',
     };
     if (options.meta) commitOptions.meta = options.meta;
     this.commitDelta(delta, commitOptions);
@@ -299,18 +315,20 @@ class ScientificCalculatorImpl implements ScientificCalculator {
   undo(): void {
     const entry = this.#undoStack.pop();
     if (!entry) return;
+    const previous = cloneSnapshot(this.#snapshot);
     this.#snapshot = cloneSnapshot(entry.before);
     this.#redoStack.push(entry);
-    this.emit({ op: 'clear' }, 'history');
+    this.emitSnapshotReplacement(previous, this.#snapshot, 'history');
     this.render();
   }
 
   redo(): void {
     const entry = this.#redoStack.pop();
     if (!entry) return;
+    const previous = cloneSnapshot(this.#snapshot);
     this.#snapshot = cloneSnapshot(entry.after);
     this.#undoStack.push(entry);
-    this.emit({ op: 'clear' }, 'history');
+    this.emitSnapshotReplacement(previous, this.#snapshot, 'history');
     this.render();
   }
 
@@ -337,14 +355,44 @@ class ScientificCalculatorImpl implements ScientificCalculator {
   }
 
   #readonlyDelta(delta: CalculatorDelta): boolean {
-    return delta.op !== 'setAngleMode' && delta.op !== 'setOutputMode';
+    if (delta.op === 'batch') return delta.deltas.some(child => this.#readonlyDelta(child));
+    return delta.op !== 'setAngleMode'
+      && delta.op !== 'setOutputMode'
+      && delta.op !== 'setTool';
+  }
+
+  private emitSnapshotReplacement(
+    previous: CalculatorSnapshot,
+    snapshot: CalculatorSnapshot,
+    source: DeltaMeta['source'],
+  ): void {
+    const deltas: CalculatorDelta[] = [{ op: 'clear' }];
+    for (const key of Object.keys(previous.scene.memory)) {
+      deltas.push({ op: 'setMemory', key, value: null });
+    }
+    for (const id of snapshot.scene.order) {
+      const entry = snapshot.scene.entries[id];
+      if (entry) deltas.push({ op: 'addEntry', entry: structuredClone(entry) });
+    }
+    for (const [key, value] of Object.entries(snapshot.scene.memory)) {
+      deltas.push({ op: 'setMemory', key, value: structuredClone(value) });
+    }
+    deltas.push(
+      { op: 'setAngleMode', angleMode: snapshot.appState.angleMode },
+      { op: 'setOutputMode', outputMode: snapshot.appState.outputMode },
+      { op: 'setTool', tool: snapshot.appState.activeTool ?? 'input' },
+    );
+    this.emit({ op: 'batch', deltas }, source);
   }
 
   private commitDelta(
     delta: CalculatorDelta,
     options: { emit: boolean; source: DeltaMeta['source']; recordHistory: boolean; meta?: Partial<DeltaMeta> },
   ): void {
-    if (this.#options.readOnly && this.#readonlyDelta(delta)) {
+    if (this.#options.readOnly
+        && options.source !== 'remote'
+        && options.source !== 'import'
+        && this.#readonlyDelta(delta)) {
       throw new KleinSdkError('readonly', 'Scientific calculator is read-only.');
     }
     const before = cloneSnapshot(this.#snapshot);
@@ -358,14 +406,30 @@ class ScientificCalculatorImpl implements ScientificCalculator {
   }
 
   private emit(delta: CalculatorDelta, source: DeltaMeta['source'], meta?: Partial<DeltaMeta>): void {
-    if (!this.#options.onDelta) return;
     const eventMeta: DeltaMeta = {
       id: meta?.id ?? this.#ids.next('delta'),
       createdAt: meta?.createdAt ?? Date.now(),
       source,
     };
     if (meta?.actorId !== undefined) eventMeta.actorId = meta.actorId;
-    this.#options.onDelta(delta, eventMeta);
+    const listeners = [
+      ...(this.#options.onDelta ? [this.#options.onDelta] : []),
+      ...this.#deltaListeners,
+    ];
+    for (const listener of listeners) {
+      try {
+        listener(structuredClone(delta), { ...eventMeta });
+      } catch (error) {
+        const sdkError = error instanceof KleinSdkError
+          ? error
+          : new KleinSdkError('calculator_observer_failed', error instanceof Error ? error.message : 'A calculator delta observer failed.');
+        try {
+          this.#options.onError?.(sdkError);
+        } catch {
+          // Error observers are isolated from committed calculator transactions.
+        }
+      }
+    }
   }
 
   private render(): void {

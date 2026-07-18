@@ -583,6 +583,7 @@ export type {
 
 export {
   bindCollaboration,
+  bindRuntimeCollaboration,
   createDeltaMessage,
   createCollaborationWebSocketTransport,
   createCollaborationWebSocketUrl,
@@ -601,6 +602,7 @@ export type {
   CollaborationSocketFactory,
   CollabMessage,
   CollaborationOptions,
+  RuntimeCollaborationOptions,
   CollaborationRoomEvent,
   CollaborationSelectionItem,
   CollaborationTransport,

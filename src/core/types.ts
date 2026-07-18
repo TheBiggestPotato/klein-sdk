@@ -111,6 +111,9 @@ export interface InstrumentOptions<TSnapshot, TDelta> {
   onError?: (error: KleinSdkError) => void;
 }
 
+/** Observer invoked for a committed instrument delta that is eligible for host synchronization. */
+export type InstrumentDeltaListener<TDelta> = (delta: TDelta, meta: DeltaMeta) => void;
+
 /** Runtime lifecycle implemented by every SDK instrument. */
 export interface KleinInstrument<TSnapshot, TDelta, TTool extends string = string> {
   readonly id: string;
@@ -118,6 +121,8 @@ export interface KleinInstrument<TSnapshot, TDelta, TTool extends string = strin
   mount(container: HTMLElement): void;
   destroy(): void;
   getSnapshot(): TSnapshot;
+  /** Subscribes to locally emitted deltas, including undo/redo deltas emitted by the instrument. */
+  subscribeDelta(listener: InstrumentDeltaListener<TDelta>): Unsubscribe;
   loadSnapshot(snapshot: TSnapshot, options?: LoadOptions): void;
   applyDelta(delta: TDelta, options?: ApplyDeltaOptions): boolean | void;
   setTool(tool: TTool): void;
@@ -258,6 +263,8 @@ export interface KleinToolRuntime<TSnapshot, TDelta, TCommand = ToolCommand> {
   loadSnapshot(snapshot: TSnapshot): void;
   applyDelta(delta: TDelta, meta?: DeltaMeta): ApplyResult;
   execute(command: TCommand): CommandResult;
+  /** Subscribes to deltas emitted by the wrapped instrument, including command-driven edits. */
+  subscribeDelta(listener: InstrumentDeltaListener<TDelta>): Unsubscribe;
   subscribe(listener: ToolEventListener<TSnapshot, TDelta, TCommand>): Unsubscribe;
   validateSnapshot(snapshot: unknown): ValidationResult<TSnapshot>;
   validateDelta(delta: unknown): ValidationResult<TDelta>;

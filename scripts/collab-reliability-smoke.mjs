@@ -73,7 +73,6 @@ await Promise.resolve();
 assert(sockets.length === 1, 'Transport did not create a socket.');
 const socket = sockets[0];
 socket.open();
-await connecting;
 socket.receive({
   type: 'hello',
   sessionId: 'work-one',
@@ -84,6 +83,7 @@ socket.receive({
   maxPayloadBytes: 1_048_576,
 });
 socket.receive({ type: 'resume-complete', sessionId: 'work-one', revision: 0 });
+await connecting;
 
 assert(socket.sent.length === 1, 'An empty session must be seeded with one snapshot.');
 assert(socket.sent[0].type === 'snapshot', 'Initial collaboration message must be a snapshot.');

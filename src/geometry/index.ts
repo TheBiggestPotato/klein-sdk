@@ -1157,6 +1157,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   #ids = createIdFactory();
   #snapshot: GeometryCalculatorSnapshot;
   #options: GeometryCalculatorOptions;
+  #deltaListeners = new Set<(delta: GeometryCalculatorDelta, meta: DeltaMeta) => void>();
   #theme: GeometryCalculatorTheme;
   #container: HTMLElement | undefined;
   #root: HTMLDivElement | undefined;
@@ -1357,6 +1358,11 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     return cloneSnapshot(this.#snapshot);
   }
 
+  subscribeDelta(listener: (delta: GeometryCalculatorDelta, meta: DeltaMeta) => void): () => void {
+    this.#deltaListeners.add(listener);
+    return () => this.#deltaListeners.delete(listener);
+  }
+
   loadSnapshot(snapshot: GeometryCalculatorSnapshot, options: LoadOptions = {}): void {
     const currentView = this.#snapshot.appState.view;
     this.#snapshot = normalizeSnapshot(snapshot);
@@ -1467,6 +1473,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     if (!previous) return;
     this.#redoStack.push(cloneSnapshot(this.#snapshot));
     this.#snapshot = previous;
+    this.#emitSnapshotReplacement('history');
     this.#cancelDrafts();
     this.#syncPanels();
     this.#render();
@@ -1477,6 +1484,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     if (!next) return;
     this.#undoStack.push(cloneSnapshot(this.#snapshot));
     this.#snapshot = next;
+    this.#emitSnapshotReplacement('history');
     this.#cancelDrafts();
     this.#syncPanels();
     this.#render();
@@ -2997,7 +3005,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     };
 
     if (options.emit !== false) {
-      this.#options.onDelta?.(delta, this.#deltaMeta(options.meta));
+      this.#emitDelta(delta, this.#deltaMeta(options.meta));
     }
     this.#updateToolbarState();
     this.#syncPanels();
@@ -3012,6 +3020,54 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     };
     if (meta?.actorId) result.actorId = meta.actorId;
     return result;
+  }
+
+  #emitDelta(delta: GeometryCalculatorDelta, meta: DeltaMeta): void {
+    const listeners = [
+      ...(this.#options.onDelta ? [this.#options.onDelta] : []),
+      ...this.#deltaListeners,
+    ];
+    for (const listener of listeners) {
+      try {
+        listener(structuredClone(delta), { ...meta });
+      } catch (error) {
+        const sdkError = error instanceof KleinSdkError
+          ? error
+          : new KleinSdkError('geometry_observer_failed', error instanceof Error ? error.message : 'A geometry delta observer failed.');
+        try {
+          this.#options.onError?.(sdkError);
+        } catch {
+          // Error observers are isolated from committed geometry transactions.
+        }
+      }
+    }
+  }
+
+  #emitSnapshotReplacement(source: DeltaMeta['source']): void {
+    const snapshot = this.#snapshot;
+    const deltas: GeometryCalculatorDelta[] = [{ op: 'clear' }];
+    for (const point of Object.values(snapshot.scene.points)) {
+      if (point.kind === 'point2d') {
+        deltas.push({ op: 'addPoint', point: structuredClone(point) });
+      }
+    }
+    for (const entity of Object.values(snapshot.scene.entities)) {
+      deltas.push({ op: 'addEntity', entity: structuredClone(entity) });
+    }
+    for (const constraint of Object.values(snapshot.scene.constraints ?? {})) {
+      deltas.push({ op: 'addConstraint', constraint: structuredClone(constraint) });
+    }
+    for (const group of Object.values(snapshot.appState.groups)) {
+      deltas.push({ op: 'addGroup', group: structuredClone(group) });
+    }
+    deltas.push(
+      { op: 'setOrder', order: [...snapshot.scene.order] },
+      { op: 'setTool', tool: snapshot.appState.activeTool },
+      { op: 'setSelection', selection: structuredClone(snapshot.appState.selected) },
+      { op: 'setView', view: { ...snapshot.appState.view } },
+      { op: 'setGrid', grid: structuredClone(snapshot.appState.grid) },
+    );
+    this.#emitDelta({ op: 'batch', deltas }, this.#deltaMeta({ source }));
   }
 
   #assertWritable(): void {
@@ -4653,7 +4709,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     const normalized = normalizeSelection(selection);
     this.#snapshot = applyGeometryCalculatorDelta(this.#snapshot, { op: 'setSelection', selection: normalized });
     if (emit) {
-      this.#options.onDelta?.({ op: 'setSelection', selection: normalized }, this.#deltaMeta(undefined));
+      this.#emitDelta({ op: 'setSelection', selection: normalized }, this.#deltaMeta(undefined));
     }
     this.#syncPanels();
     this.#render();

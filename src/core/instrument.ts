@@ -37,6 +37,7 @@ export function createStubInstrument<TSnapshot, TDelta, TTool extends string>(
   let snapshot = config.options?.initialSnapshot ?? config.initialSnapshot;
   let container: HTMLElement | undefined = config.options?.container;
   let activeTool = config.defaultTool;
+  const deltaListeners = new Set<(delta: TDelta, meta: DeltaMeta) => void>();
 
   return {
     id: ids.next(config.kind),
@@ -53,6 +54,10 @@ export function createStubInstrument<TSnapshot, TDelta, TTool extends string>(
     },
     getSnapshot() {
       return snapshot;
+    },
+    subscribeDelta(listener) {
+      deltaListeners.add(listener);
+      return () => deltaListeners.delete(listener);
     },
     loadSnapshot(nextSnapshot: TSnapshot, _options?: LoadOptions) {
       snapshot = nextSnapshot;
@@ -160,7 +165,10 @@ export function createInstrumentRuntime<
           throw validationError('invalid_delta', 'Delta validation failed.', validation.issues);
         }
         const applyOptions: ApplyDeltaOptions = { emit: (meta?.source ?? 'local') === 'local' };
-        if (meta) applyOptions.meta = meta;
+        // Runtime callers may omit metadata for a local edit. Preserve that public
+        // default when adapting into instruments whose low-level applyDelta default
+        // is intentionally remote/non-emitting.
+        applyOptions.meta = meta ?? { source: 'local' };
         const applied = config.instrument.applyDelta(validation.value, applyOptions);
         const result: ApplyResult = {
           ok: true,
@@ -185,6 +193,9 @@ export function createInstrumentRuntime<
       }
       emit({ type: 'command-executed', command, result });
       return result;
+    },
+    subscribeDelta(listener) {
+      return config.instrument.subscribeDelta(listener);
     },
     subscribe(listener) {
       listeners.add(listener);

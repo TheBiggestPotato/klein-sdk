@@ -73,16 +73,8 @@ const rightTransport = createInMemoryCollaborationTransport({
   actorId: 'right',
   hub,
 });
-const left = createGraphingCalculator({
-  onDelta(delta, meta) {
-    leftTransport.sendDelta(delta, meta);
-  },
-});
-const right = createGraphingCalculator({
-  onDelta(delta, meta) {
-    rightTransport.sendDelta(delta, meta);
-  },
-});
+const left = createGraphingCalculator();
+const right = createGraphingCalculator();
 bindCollaboration({ instrument: left, transport: leftTransport });
 bindCollaboration({ instrument: right, transport: rightTransport });
 left.addExpression('y = x + 1');

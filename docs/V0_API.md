@@ -35,11 +35,17 @@ Key exports:
 
 - `KleinInstrument`
 - `KleinToolRuntime`
+- `InstrumentDeltaListener`
 - `InstrumentSnapshot`
 - `DeltaMeta`
 - `ToolCommand`
 - `ValidationResult`
 - `KleinSdkError`
+
+Every built-in `KleinInstrument` and `KleinToolRuntime` exposes `subscribeDelta(listener)`.
+The stream reports committed local mutations and any history mutations emitted by the tool,
+independently of the constructor's optional `onDelta` observer, allowing collaboration to be
+attached after an instrument or runtime has been created.
 
 ## Calculators
 
@@ -190,6 +196,7 @@ Key exports:
 - `createCollaborationWebSocketUrl(input)`
 - `parseCollaborationMessage(value)`
 - `bindCollaboration(input)`
+- `bindRuntimeCollaboration(input)`
 - `createInMemoryCollaborationHub()`
 - `createInMemoryCollaborationTransport(options)`
 - `sendCollaborativeCursor(transport, cursor)`
@@ -203,6 +210,21 @@ Call `transport.checkpoint(snapshot)` before submit or navigation when the host 
 PostgreSQL-confirmed revision rather than an in-memory acknowledgement.
 Both pending message count and estimated JSON bytes are bounded (`maxPendingMessages` and
 `maxPendingBytes`) so a disconnected host cannot accumulate unbounded memory.
+
+`bindCollaboration({ instrument, transport })` is a two-way binding: committed local and
+history deltas are sent through the transport, while inbound deltas are normalized to the
+`remote` source and applied without echo. Do not also forward the instrument constructor's
+`onDelta` callback to the same transport, because that would send each mutation twice.
+Use `bindRuntimeCollaboration({ runtime, transport })` when the host owns a
+`KleinToolRuntime`; its delta subscription includes edits produced by runtime commands as
+well as direct `applyDelta` calls. Both bindings accept `onError` so rejected inbound data
+is reported without interrupting other peers.
+
+In-memory collaboration elects the first established peer as the room snapshot authority.
+Later peers pull a fresh authoritative snapshot when they join, so their empty initial
+document is never published over existing room state. `binding.requestSync()` repeats that
+safe pull when supported; it does not push the caller's current snapshot. Explicit
+`transport.sendSnapshot(snapshot)` remains a deliberate room-wide replacement operation.
 
 ### `klein-sdk/embed`
 

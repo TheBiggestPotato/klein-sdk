@@ -1,8 +1,10 @@
+import { KleinSdkError } from '../core/index.js';
 import type {
   DeltaMeta,
   JsonValue,
   KleinInstrument,
   KleinToolKey,
+  KleinToolRuntime,
   Vector2,
 } from '../core/index.js';
 
@@ -96,6 +98,10 @@ export interface CollaborationTransport<TSnapshot, TDelta> {
   onDelta(handler: (delta: TDelta, meta: DeltaMeta) => void): () => void;
   onSnapshot(handler: (snapshot: TSnapshot) => void): () => void;
   onPresence?(handler: (presence: PresenceEvent) => void): () => void;
+  /** Registers a fresh snapshot source for transports that support peer-initiated synchronization. */
+  setSnapshotProvider?(provider: () => TSnapshot): () => void;
+  /** Pulls the authoritative room snapshot into this peer without publishing local state. */
+  requestSnapshot?(): boolean;
 }
 
 export {
@@ -117,6 +123,8 @@ export type {
 /** Handle returned after binding an instrument to a transport. */
 export interface CollaborationBinding {
   readonly ready: Promise<void>;
+  /** Requests authoritative state from transports that implement safe pull synchronization. */
+  requestSync(): boolean;
   disconnect(): void;
 }
 
@@ -125,33 +133,134 @@ export interface CollaborationOptions<TSnapshot, TDelta> {
   instrument: KleinInstrument<TSnapshot, TDelta>;
   transport: CollaborationTransport<TSnapshot, TDelta>;
   onPresence?: (presence: PresenceEvent) => void;
+  onError?: (error: KleinSdkError) => void;
 }
 
-/** Wires remote transport events into an instrument without making the instrument know about networking. */
-export function bindCollaboration<TSnapshot, TDelta>({
-  instrument,
-  transport,
-  onPresence,
-}: CollaborationOptions<TSnapshot, TDelta>): CollaborationBinding {
+/** Inputs for connecting a shared tool runtime to a collaboration transport. */
+export interface RuntimeCollaborationOptions<TSnapshot, TDelta, TCommand> {
+  runtime: KleinToolRuntime<TSnapshot, TDelta, TCommand>;
+  transport: CollaborationTransport<TSnapshot, TDelta>;
+  onPresence?: (presence: PresenceEvent) => void;
+  onError?: (error: KleinSdkError) => void;
+}
+
+interface CollaborationSource<TSnapshot, TDelta> {
+  getSnapshot(): TSnapshot;
+  loadRemoteSnapshot(snapshot: TSnapshot): void;
+  applyRemoteDelta(delta: TDelta, meta: DeltaMeta): void;
+  subscribeDelta(handler: (delta: TDelta, meta: DeltaMeta) => void): () => void;
+}
+
+/** Wires local and remote instrument deltas without making the instrument know about networking. */
+export function bindCollaboration<TSnapshot, TDelta>(
+  options: CollaborationOptions<TSnapshot, TDelta>,
+): CollaborationBinding {
+  const { instrument } = options;
+  return bindCollaborationSource({
+    getSnapshot: () => instrument.getSnapshot(),
+    loadRemoteSnapshot: snapshot => instrument.loadSnapshot(snapshot, { source: 'remote' }),
+    applyRemoteDelta: (delta, meta) => {
+      instrument.applyDelta(delta, { emit: false, meta });
+    },
+    subscribeDelta: handler => instrument.subscribeDelta(handler),
+  }, options.transport, options.onPresence, options.onError);
+}
+
+/** Wires a shared KleinToolRuntime to collaboration using its instrument-originated delta stream. */
+export function bindRuntimeCollaboration<TSnapshot, TDelta, TCommand>(
+  options: RuntimeCollaborationOptions<TSnapshot, TDelta, TCommand>,
+): CollaborationBinding {
+  const { runtime } = options;
+  return bindCollaborationSource({
+    getSnapshot: () => runtime.getSnapshot(),
+    loadRemoteSnapshot: snapshot => runtime.loadSnapshot(snapshot),
+    applyRemoteDelta: (delta, meta) => {
+      const result = runtime.applyDelta(delta, meta);
+      if (!result.ok) throw result.error;
+    },
+    subscribeDelta: handler => runtime.subscribeDelta(handler),
+  }, options.transport, options.onPresence, options.onError);
+}
+
+function bindCollaborationSource<TSnapshot, TDelta>(
+  source: CollaborationSource<TSnapshot, TDelta>,
+  transport: CollaborationTransport<TSnapshot, TDelta>,
+  onPresence: ((presence: PresenceEvent) => void) | undefined,
+  onError: ((error: KleinSdkError) => void) | undefined,
+): CollaborationBinding {
+  const report = (error: unknown, code: string, message: string): void => {
+    const sdkError = error instanceof KleinSdkError
+      ? error
+      : new KleinSdkError(code, error instanceof Error ? `${message} ${error.message}` : message);
+    try {
+      onError?.(sdkError);
+    } catch {
+      // Binding error observers cannot interrupt collaboration fan-out.
+    }
+  };
+
+  const offSnapshotProvider = transport.setSnapshotProvider?.(
+    () => source.getSnapshot(),
+  ) ?? (() => undefined);
+  const offLocalDelta = source.subscribeDelta((delta, meta) => {
+    if (meta.source === 'remote') return;
+    try {
+      transport.sendDelta(delta, { ...meta });
+    } catch (error) {
+      report(error, 'collaboration_delta_send_failed', 'A local collaboration delta could not be sent.');
+    }
+  });
   const offDelta = transport.onDelta((delta, meta) => {
-    instrument.applyDelta(delta, { emit: false, meta });
+    try {
+      source.applyRemoteDelta(delta, { ...meta, source: 'remote' });
+    } catch (error) {
+      report(error, 'collaboration_delta_apply_failed', 'A remote collaboration delta could not be applied.');
+    }
   });
   const offSnapshot = transport.onSnapshot((snapshot) => {
-    instrument.loadSnapshot(snapshot, { source: 'remote' });
+    try {
+      source.loadRemoteSnapshot(snapshot);
+    } catch (error) {
+      report(error, 'collaboration_snapshot_load_failed', 'A remote collaboration snapshot could not be loaded.');
+    }
   });
   const offPresence = transport.onPresence && onPresence
-    ? transport.onPresence(onPresence)
+    ? transport.onPresence((presence) => {
+      try {
+        onPresence(presence);
+      } catch (error) {
+        report(error, 'collaboration_presence_observer_failed', 'A collaboration presence observer failed.');
+      }
+    })
     : () => undefined;
 
   const ready = transport.connect();
-  void ready.catch(() => undefined);
+  void ready.catch(error => report(
+    error,
+    'collaboration_connect_failed',
+    'The collaboration transport could not connect.',
+  ));
 
+  let disconnected = false;
   return {
     ready,
+    requestSync() {
+      if (disconnected) return false;
+      try {
+        return transport.requestSnapshot?.() ?? false;
+      } catch (error) {
+        report(error, 'collaboration_sync_failed', 'The collaboration synchronization request failed.');
+        return false;
+      }
+    },
     disconnect() {
+      if (disconnected) return;
+      disconnected = true;
+      offLocalDelta();
       offDelta();
       offSnapshot();
       offPresence();
+      offSnapshotProvider();
       transport.disconnect();
     },
   };
@@ -170,21 +279,42 @@ export interface InMemoryCollaborationTransportOptions<TSnapshot, TDelta> {
   hub?: InMemoryCollaborationHub<TSnapshot, TDelta>;
 }
 
+interface InMemoryCollaborationRoom<TSnapshot, TDelta> {
+  participants: Set<InMemoryCollaborationTransport<TSnapshot, TDelta>>;
+  authority: InMemoryCollaborationTransport<TSnapshot, TDelta>;
+}
+
+const inMemorySnapshotProviders = new WeakMap<object, () => unknown>();
+
 /** In-process collaboration hub for local testing and host adapters that fan out events themselves. */
 export class InMemoryCollaborationHub<TSnapshot, TDelta> {
-  #rooms = new Map<string, Set<InMemoryCollaborationTransport<TSnapshot, TDelta>>>();
+  #rooms = new Map<string, InMemoryCollaborationRoom<TSnapshot, TDelta>>();
 
   join(roomId: string, transport: InMemoryCollaborationTransport<TSnapshot, TDelta>): void {
-    const room = this.#rooms.get(roomId) ?? new Set<InMemoryCollaborationTransport<TSnapshot, TDelta>>();
-    room.add(transport);
-    this.#rooms.set(roomId, room);
+    const existing = this.#rooms.get(roomId);
+    if (existing === undefined) {
+      this.#rooms.set(roomId, {
+        participants: new Set([transport]),
+        authority: transport,
+      });
+      return;
+    }
+    if (existing.participants.has(transport)) return;
+    existing.participants.add(transport);
+    this.synchronize(roomId, transport);
   }
 
   leave(roomId: string, transport: InMemoryCollaborationTransport<TSnapshot, TDelta>): void {
     const room = this.#rooms.get(roomId);
     if (!room) return;
-    room.delete(transport);
-    if (room.size === 0) this.#rooms.delete(roomId);
+    room.participants.delete(transport);
+    if (room.participants.size === 0) {
+      this.#rooms.delete(roomId);
+      return;
+    }
+    if (room.authority === transport) {
+      room.authority = room.participants.values().next().value as InMemoryCollaborationTransport<TSnapshot, TDelta>;
+    }
   }
 
   publish(
@@ -194,13 +324,44 @@ export class InMemoryCollaborationHub<TSnapshot, TDelta> {
   ): void {
     const room = this.#rooms.get(roomId);
     if (!room) return;
-    for (const transport of room) {
-      if (transport !== source) transport.receive(event);
+    if (event.type === 'snapshot') room.authority = source;
+    for (const transport of [...room.participants]) {
+      if (transport === source) continue;
+      try {
+        transport.receive(cloneCollaborationRoomEvent(event));
+      } catch {
+        // One peer must not prevent delivery to the rest of the room.
+      }
     }
   }
 
+  /** Pulls a fresh snapshot from an established peer and delivers it only to the target. */
+  synchronize(
+    roomId: string,
+    target: InMemoryCollaborationTransport<TSnapshot, TDelta>,
+  ): boolean {
+    const room = this.#rooms.get(roomId);
+    if (!room || !room.participants.has(target)) return false;
+    const candidates = [
+      room.authority,
+      ...[...room.participants].filter(candidate => candidate !== room.authority),
+    ];
+    for (const candidate of candidates) {
+      if (candidate === target) continue;
+      const captured = captureInMemorySnapshot<TSnapshot, TDelta>(candidate);
+      if (!captured.available) continue;
+      try {
+        target.receive({ type: 'snapshot', snapshot: captured.snapshot });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
   participantCount(roomId: string): number {
-    return this.#rooms.get(roomId)?.size ?? 0;
+    return this.#rooms.get(roomId)?.participants.size ?? 0;
   }
 }
 
@@ -254,6 +415,20 @@ implements CollaborationTransport<TSnapshot, TDelta> {
     this.#publish({ type: 'presence', presence: enriched });
   }
 
+  setSnapshotProvider(provider: () => TSnapshot): () => void {
+    inMemorySnapshotProviders.set(this, provider);
+    return () => {
+      if (inMemorySnapshotProviders.get(this) === provider) {
+        inMemorySnapshotProviders.delete(this);
+      }
+    };
+  }
+
+  requestSnapshot(): boolean {
+    if (!this.#connected) return false;
+    return this.#hub.synchronize(this.roomId, this);
+  }
+
   onDelta(handler: (delta: TDelta, meta: DeltaMeta) => void): () => void {
     this.#deltaHandlers.add(handler);
     return () => this.#deltaHandlers.delete(handler);
@@ -271,11 +446,30 @@ implements CollaborationTransport<TSnapshot, TDelta> {
 
   receive(event: CollaborationRoomEvent<TSnapshot, TDelta>): void {
     if (event.type === 'delta') {
-      for (const handler of this.#deltaHandlers) handler(event.delta, event.meta);
+      const remoteMeta: DeltaMeta = { ...event.meta, source: 'remote' };
+      for (const handler of this.#deltaHandlers) {
+        try {
+          handler(structuredClone(event.delta), { ...remoteMeta });
+        } catch {
+          // Individual peer handlers are isolated from the room fan-out.
+        }
+      }
     } else if (event.type === 'snapshot') {
-      for (const handler of this.#snapshotHandlers) handler(event.snapshot);
+      for (const handler of this.#snapshotHandlers) {
+        try {
+          handler(structuredClone(event.snapshot));
+        } catch {
+          // Individual peer handlers are isolated from the room fan-out.
+        }
+      }
     } else {
-      for (const handler of this.#presenceHandlers) handler(event.presence);
+      for (const handler of this.#presenceHandlers) {
+        try {
+          handler(structuredClone(event.presence));
+        } catch {
+          // Individual peer handlers are isolated from the room fan-out.
+        }
+      }
     }
   }
 
@@ -321,6 +515,34 @@ export function sendCollaborativeCursor<TSnapshot, TDelta>(
   if (cursor.tool !== undefined) presence.tool = cursor.tool;
   if (cursor.selection !== undefined) presence.selection = cursor.selection;
   transport.sendPresence?.(presence);
+}
+
+function cloneCollaborationRoomEvent<TSnapshot, TDelta>(
+  event: CollaborationRoomEvent<TSnapshot, TDelta>,
+): CollaborationRoomEvent<TSnapshot, TDelta> {
+  if (event.type === 'delta') {
+    return {
+      type: 'delta',
+      delta: structuredClone(event.delta),
+      meta: { ...event.meta },
+    };
+  }
+  if (event.type === 'snapshot') {
+    return { type: 'snapshot', snapshot: structuredClone(event.snapshot) };
+  }
+  return { type: 'presence', presence: structuredClone(event.presence) };
+}
+
+function captureInMemorySnapshot<TSnapshot, TDelta>(
+  transport: InMemoryCollaborationTransport<TSnapshot, TDelta>,
+): { available: true; snapshot: TSnapshot } | { available: false } {
+  const provider = inMemorySnapshotProviders.get(transport);
+  if (provider === undefined) return { available: false };
+  try {
+    return { available: true, snapshot: structuredClone(provider()) as TSnapshot };
+  } catch {
+    return { available: false };
+  }
 }
 
 function defaultHub<TSnapshot, TDelta>(roomId: string): InMemoryCollaborationHub<TSnapshot, TDelta> {

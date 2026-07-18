@@ -575,6 +575,7 @@ class GraphingCalculatorImpl implements GraphingCalculator {
 
   readonly #ids = createIdFactory();
   readonly #options: GraphingOptions;
+  readonly #deltaListeners = new Set<(delta: GraphingDelta, meta: DeltaMeta) => void>();
   #snapshot: GraphingSnapshot;
   #undoStack: HistoryEntry[] = [];
   #redoStack: HistoryEntry[] = [];
@@ -612,6 +613,11 @@ class GraphingCalculatorImpl implements GraphingCalculator {
     return cloneSnapshot(this.#snapshot);
   }
 
+  subscribeDelta(listener: (delta: GraphingDelta, meta: DeltaMeta) => void): () => void {
+    this.#deltaListeners.add(listener);
+    return () => this.#deltaListeners.delete(listener);
+  }
+
   loadSnapshot(snapshot: GraphingSnapshot, options?: LoadOptions): void {
     const previousViewport = options?.preserveView ? this.#snapshot.appState.viewport : undefined;
     this.#snapshot = normalizeGraphingSnapshot(snapshot);
@@ -633,7 +639,7 @@ class GraphingCalculatorImpl implements GraphingCalculator {
     const commitOptions: { emit: boolean; source: DeltaMeta['source']; recordHistory: boolean; meta?: Partial<DeltaMeta> } = {
       emit: options.emit ?? false,
       source,
-      recordHistory: source !== 'history',
+      recordHistory: source === 'local',
     };
     if (meta) commitOptions.meta = meta;
     this.commitDelta(delta, commitOptions);
@@ -845,18 +851,60 @@ class GraphingCalculatorImpl implements GraphingCalculator {
   }
 
   private emit(delta: GraphingDelta, source: DeltaMeta['source'], meta?: Partial<DeltaMeta>): void {
-    if (!this.#options.onDelta) return;
     const eventMeta: DeltaMeta = {
       id: meta?.id ?? this.#ids.next('delta'),
       createdAt: meta?.createdAt ?? Date.now(),
       source,
     };
     if (meta?.actorId !== undefined) eventMeta.actorId = meta.actorId;
-    this.#options.onDelta(delta, eventMeta);
+    const listeners = [
+      ...(this.#options.onDelta ? [this.#options.onDelta] : []),
+      ...this.#deltaListeners,
+    ];
+    for (const listener of listeners) {
+      try {
+        listener(structuredClone(delta), { ...eventMeta });
+      } catch (error) {
+        this.#notifyObserverError(error);
+      }
+    }
+  }
+
+  #notifyObserverError(error: unknown): void {
+    const sdkError = error instanceof KleinSdkError
+      ? error
+      : new KleinSdkError('graphing_observer_failed', error instanceof Error ? error.message : 'A graphing delta observer failed.');
+    try {
+      this.#options.onError?.(sdkError);
+    } catch {
+      // Error observers are isolated from committed graphing transactions.
+    }
   }
 
   private emitSnapshotReplacement(source: DeltaMeta['source']): void {
-    this.emit({ op: 'clear' }, source);
+    const snapshot = this.#snapshot;
+    const deltas: GraphingDelta[] = [{ op: 'clear' }];
+    for (const id of snapshot.scene.order) {
+      const expression = snapshot.scene.expressions[id];
+      if (expression) {
+        deltas.push({ op: 'addExpression', expression: structuredClone(expression) });
+        continue;
+      }
+      const point = snapshot.scene.points[id];
+      if (point) {
+        deltas.push({ op: 'addPoint', point: structuredClone(point) });
+        continue;
+      }
+      const slider = snapshot.scene.sliders[id];
+      if (slider) deltas.push({ op: 'addSlider', slider: structuredClone(slider) });
+    }
+    deltas.push(
+      { op: 'setOrder', order: [...snapshot.scene.order] },
+      { op: 'setViewport', viewport: { ...snapshot.appState.viewport } },
+      { op: 'setTool', tool: snapshot.appState.activeTool ?? 'select' },
+      { op: 'setSelection', ids: [...(snapshot.appState.selectedIds ?? [])] },
+    );
+    this.emit({ op: 'batch', deltas }, source);
   }
 
   private requireExpression(id: string): GraphExpression {

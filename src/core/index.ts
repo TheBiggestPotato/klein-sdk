@@ -19,6 +19,7 @@ export type {
   ExportOptions,
   ExportResult,
   InstrumentOptions,
+  InstrumentDeltaListener,
   InstrumentSnapshot,
   JsonObject,
   JsonPrimitive,

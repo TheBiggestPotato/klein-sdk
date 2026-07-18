@@ -1,11 +1,12 @@
 # Geometry Lab Hardening Plan
 
-Last updated: 2026-07-16
+Last updated: 2026-07-18
 
 ## Status
 
 - Overall: **Complete**
 - Current phase: **7 — Module decomposition and compatibility (complete)**
+- Client collaboration entry flow: **Complete**
 - Geometry Lab test status: **147 passing, 0 TODOs**
 - CI status: `npm run test:ci` passes with type checking, build, 147 Geometry Lab tests, and all existing smoke suites.
 
@@ -127,6 +128,21 @@ Exit criteria:
 - Rendering respects camera semantics and configured complexity limits.
 - Randomized state-machine tests preserve all invariants.
 
+## Post-completion collaboration audit
+
+- [x] Make instrument and runtime collaboration bindings two-way, including command-driven edits.
+- [x] Add late-join synchronization and authoritative in-memory room state.
+- [x] Harden WebSocket handshake, replay, reconnect, persistence acknowledgements, and observer isolation.
+- [x] Rebase acknowledged-but-unpersisted local mutations after a relay rollback.
+- [x] Make undo/redo converge across Geometry Lab, graphing, scientific, and probability runtimes.
+- [x] Finish and verify the browser host's room routing, Sync durability, revocation recovery, and adapter lifecycle fixes in `klein-client`.
+- [x] Separate personal saves from live collaboration in Geometry Lab labels and guidance.
+- [x] Create new live rooms as link-editable and open the share flow automatically.
+- [x] Seed the current construction and confirm its exact durable checkpoint before exposing the new room URL.
+- [x] Bound and cancel stalled room preparation, deleting unfinished rooms before they can be shared.
+- [x] Replace misleading private-room sharing with a shared-copy recovery action and a tailored access-denied explanation.
+- [x] Cover room creation, cross-account joining, private-room denial, and durable Sync with focused browser tests.
+
 ## Progress log
 
 - **2026-07-15:** Completed the initial read-only audit and reproduced critical ID, history, mutation-aliasing, deletion, formula, solid, and rendering failures.
@@ -160,3 +176,7 @@ Exit criteria:
 - **2026-07-16:** Replaced the duplicated Graphing 3D executor with a 117-line compatibility facade over the Geometry Lab runtime and strict validators. Legacy registry aliases remain 3D-first, inherit complexity limits, and preserve the historical runtime key where directly requested.
 - **2026-07-16:** Removed the unused `renderer3d` and `snapEnabled` options and reject them explicitly for JavaScript callers instead of silently ignoring them. `initialView`, `activeView`, `view2d`, and `activeTool` are documented and tested as host-facing state, with initial snapshots retaining precedence.
 - **2026-07-16:** Removed stale renamed build artifacts and extraction dead code, compared runtime export keys before/after the barrel move, and completed independent architecture/integration audits with no P0/P1 findings. The hardening program closes at **147 passing tests and 0 TODOs**; full `test:ci` passes.
+- **2026-07-16:** Completed the SDK collaboration follow-up: real outbound delta subscriptions, two-way instrument/runtime bindings, late-join room authority, strict WebSocket protocol handling, lost-ACK recognition, persistence-aware checkpoints, relay rollback/rebase, convergent undo/redo, and isolated observers. `test:collab` passes **21/21** and full `test:ci` passes **168/168** with all smoke suites. Browser-host completion remains in progress in the adjacent `klein-client` repository.
+- **2026-07-18:** Completed the adjacent `klein-client` collaboration audit. Room routing, durable Sync, reconnect/rebase ordering, authorization/error locking, read-only enforcement, adapter lifecycle, and workspace identity validation are covered by focused tests and full checks. Client validation passed typecheck, lint, format, collaboration tests, 11 E2E workflows, and 3 accessibility checks.
+- **2026-07-18:** Improved first-time tool discovery in `klein-client`: the compact Geometry Lab rail now expands on demand to show tool and category names, keeps the existing detailed category drawers, collapses cleanly, and overlays rather than compressing the canvas on narrow screens. Added a focused E2E regression and verified desktop and mobile-width behavior in the browser.
+- **2026-07-18:** Reworked the Geometry Lab collaboration entry flow in `klein-client`. Personal saves are now clearly distinguished from live rooms; “Colaborează live” creates a link-editable room from the current construction and opens the share dialog automatically; legacy private rooms offer a safe shared-copy path; copy failures and 403 responses receive actionable guidance. The collaborative URL is not exposed until the creator's exact snapshot survives reconnect recovery and receives durable persistence confirmation. Stalled setup is bounded and cancellable, with unfinished rooms deleted before any redirect. Focused browser coverage verifies creation, pre-share disconnect recovery, cancellation, a second-account join, legacy denial, bad-link guidance, and explicit save semantics.
