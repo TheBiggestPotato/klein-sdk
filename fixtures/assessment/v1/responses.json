@@ -1,0 +1,106 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "math_expression",
+    "interactionId": "interaction-math-expression",
+    "state": "saved",
+    "raw": "x^2",
+    "latex": "x^2"
+  },
+  {
+    "schemaVersion": 1,
+    "type": "choice_single",
+    "interactionId": "interaction-single",
+    "state": "saved",
+    "selectedOptionId": "option-b"
+  },
+  {
+    "schemaVersion": 1,
+    "type": "tool_snapshot",
+    "interactionId": "interaction-tool-snapshot",
+    "state": "saved",
+    "snapshotArtifactId": "artifact-geometry-snapshot-001"
+  },
+  {
+    "schemaVersion": 1,
+    "type": "choice_multiple",
+    "interactionId": "interaction-multiple",
+    "state": "saved",
+    "selectedOptionIds": [
+      "statement-a",
+      "statement-b"
+    ]
+  },
+  {
+    "schemaVersion": 1,
+    "type": "boolean",
+    "interactionId": "interaction-boolean",
+    "state": "submitted",
+    "value": true
+  },
+  {
+    "schemaVersion": 1,
+    "type": "short_text",
+    "interactionId": "interaction-short",
+    "state": "draft",
+    "raw": "parabolă"
+  },
+  {
+    "schemaVersion": 1,
+    "type": "numeric",
+    "interactionId": "interaction-numeric",
+    "state": "saved",
+    "raw": "2 cm",
+    "parsedValue": 2,
+    "unit": "cm"
+  },
+  {
+    "schemaVersion": 1,
+    "type": "extended_text",
+    "interactionId": "interaction-extended",
+    "state": "draft",
+    "text": "Am comparat valorile din tabel cu expresia funcției."
+  },
+  {
+    "schemaVersion": 1,
+    "type": "file_photo",
+    "interactionId": "interaction-photo",
+    "state": "saved",
+    "artifactIds": [
+      "artifact-photo-page-1"
+    ]
+  },
+  {
+    "schemaVersion": 1,
+    "type": "composite",
+    "interactionId": "interaction-composite",
+    "state": "saved",
+    "childResponses": [
+      {
+        "schemaVersion": 1,
+        "type": "numeric",
+        "interactionId": "interaction-numeric",
+        "state": "saved",
+        "raw": "2 cm",
+        "parsedValue": 2,
+        "unit": "cm"
+      },
+      {
+        "schemaVersion": 1,
+        "type": "file_photo",
+        "interactionId": "interaction-photo",
+        "state": "saved",
+        "artifactIds": [
+          "artifact-photo-page-1"
+        ]
+      },
+      {
+        "schemaVersion": 1,
+        "type": "tool_snapshot",
+        "interactionId": "interaction-tool-snapshot",
+        "state": "saved",
+        "snapshotArtifactId": "artifact-geometry-snapshot-001"
+      }
+    ]
+  }
+]
