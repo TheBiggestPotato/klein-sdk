@@ -1,4 +1,5 @@
 import { KleinSdkError } from '../core/index.js';
+import { KLEIN_UI_FONT_STACK } from '../theme/index.js';
 import type { ExportOptions, Vector2, Vector3 } from '../core/index.js';
 import type { GeometryPoint3D } from '../geometry-core/index.js';
 import {
@@ -211,7 +212,7 @@ export function renderGeometryLabSvg3D(
   const builder = new BoundedSvgOutput(limits.maxExportBytes);
   builder.append(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Klein 3D calculator scene">`);
   builder.append(`<rect width="100%" height="100%" fill="${escapeXml(String(background))}"/>`);
-  builder.append('<g stroke-linecap="round" stroke-linejoin="round" font-family="system-ui, -apple-system, Segoe UI, sans-serif">');
+  builder.append(`<g stroke-linecap="round" stroke-linejoin="round" font-family="${KLEIN_UI_FONT_STACK.replace(/"/g, '&quot;')}">`);
   for (const primitive of primitives) builder.append(renderPrimitive(primitive));
   if (options.includeMeasurements !== false) builder.append(renderMeasurementsSvg(snapshot, width));
   builder.append('</g></svg>');

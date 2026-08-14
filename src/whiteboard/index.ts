@@ -18,6 +18,7 @@ import type {
   View2D,
 } from '../core/index.js';
 import { applyKleinToolTheme, resolveKleinToolTheme } from '../theme/index.js';
+import { KLEIN_MATH_FONT_STACK } from '../theme/index.js';
 import type { KleinToolTheme, KleinToolThemeInput } from '../theme/index.js';
 
 /** Tool ids for the general classroom whiteboard. */
@@ -2433,7 +2434,7 @@ const WHITEBOARD_CSS = `
 }
 .kwb-el { pointer-events: all; }
 .kwb-text {
-  font-family: "STIX Two Text", "Cambria Math", Georgia, serif;
+  font-family: var(--klein-tool-math-font, ${KLEIN_MATH_FONT_STACK});
   dominant-baseline: text-before-edge;
 }
 .kwb-toolbar {

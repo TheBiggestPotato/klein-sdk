@@ -1,5 +1,6 @@
 import { createIdFactory, KleinSdkError } from '../core/index.js';
 import { resolveKleinToolTheme } from '../theme/index.js';
+import { KLEIN_MONO_FONT_STACK, KLEIN_UI_FONT_STACK } from '../theme/index.js';
 import type { KleinToolThemeInput } from '../theme/index.js';
 import type {
   ApplyDeltaOptions,
@@ -1230,7 +1231,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
       overflow: 'hidden',
       color: 'var(--kgc-text)',
       colorScheme: this.#theme.colorScheme,
-      fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      fontFamily: KLEIN_UI_FONT_STACK,
       userSelect: 'none',
     });
 
@@ -3720,7 +3721,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
       borderRadius: '6px',
       background: 'var(--kgc-button-bg)',
       color: 'var(--kgc-button-text)',
-      font: '650 11px/1 Inter, ui-sans-serif, system-ui, sans-serif',
+      font: `650 11px/1 ${KLEIN_UI_FONT_STACK}`,
       cursor: 'pointer',
       whiteSpace: 'nowrap',
     });
@@ -3909,7 +3910,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
         borderRadius: '6px',
         background: 'var(--kgc-canvas)',
         color: 'var(--kgc-accent)',
-        font: '700 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace',
+        font: `700 12px/1.2 ${KLEIN_MONO_FONT_STACK}`,
         letterSpacing: '0',
       });
       const description = document.createElement('div');
@@ -3942,7 +3943,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
       borderRadius: '6px',
       background: 'var(--kgc-button-bg)',
       color: 'var(--kgc-button-text)',
-      font: '600 12px/1 Inter, ui-sans-serif, system-ui, sans-serif',
+      font: `600 12px/1 ${KLEIN_UI_FONT_STACK}`,
       cursor: 'pointer',
       whiteSpace: 'nowrap',
     });
@@ -4759,7 +4760,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
       background: this.#theme.surfaceRaised,
       boxShadow: '0 14px 30px rgba(15, 23, 42, 0.18)',
       color: this.#theme.text,
-      font: '500 12px/1.2 ui-sans-serif, system-ui, sans-serif',
+      font: `500 12px/1.2 ${KLEIN_UI_FONT_STACK}`,
       userSelect: 'none',
     });
     const appendAction = (label: string, action: () => void): void => {
@@ -5105,7 +5106,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
 
     ctx.save();
     ctx.lineCap = 'butt';
-    ctx.font = '11px Inter, system-ui, sans-serif';
+    ctx.font = `11px ${KLEIN_UI_FONT_STACK}`;
     ctx.fillStyle = this.#theme.gridLabel;
 
     const startX = Math.floor(bounds.minX / step) * step;
@@ -5208,7 +5209,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
       ctx.fill();
       ctx.stroke();
       if (point.label) {
-        ctx.font = '600 12px Inter, system-ui, sans-serif';
+        ctx.font = `600 12px ${KLEIN_UI_FONT_STACK}`;
         ctx.fillStyle = this.#theme.text;
         ctx.fillText(point.label, screen.x + 8, screen.y - 8);
       }
@@ -5528,7 +5529,7 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   #drawTextAtWorld(ctx: CanvasRenderingContext2D, point: Vector2, text: string, color: string): void {
     const screen = this.worldToScreen(point);
     ctx.save();
-    ctx.font = '600 12px Inter, system-ui, sans-serif';
+    ctx.font = `600 12px ${KLEIN_UI_FONT_STACK}`;
     ctx.lineWidth = 3;
     ctx.strokeStyle = this.#theme.textHalo;
     ctx.strokeText(text, screen.x + 6, screen.y - 6);
@@ -6722,7 +6723,7 @@ function inputStyle(width: string): Partial<CSSStyleDeclaration> {
     padding: '0 8px',
     color: 'var(--kgc-text)',
     background: 'var(--kgc-input-bg)',
-    font: '600 12px/1 Inter, ui-sans-serif, system-ui, sans-serif',
+    font: `600 12px/1 ${KLEIN_UI_FONT_STACK}`,
   };
 }
 
@@ -8896,7 +8897,7 @@ function geometrySceneToSvg(
         y: screen.y - 6,
         fill: entity.color ?? DEFAULT_DRAW_COLOR,
         'font-size': 12,
-        'font-family': 'Inter, ui-sans-serif, system-ui, sans-serif',
+        'font-family': KLEIN_UI_FONT_STACK,
       }, escapeXml(entity.text ?? entity.label ?? relationMarkerLabel(entity.relationKind))));
       continue;
     }
