@@ -6,14 +6,14 @@
   "itemInstanceId": "item-instance-demo-001",
   "sequence": 1,
   "locale": "ro-RO",
-  "title": "Interpretarea unei funcții pătratice",
+  "title": "Interpretarea unei func\u021bii p\u0103tratice",
   "contentBlocks": [
     {
       "id": "block-paragraph",
       "schemaVersion": 1,
       "type": "paragraph",
       "locale": "ro-RO",
-      "text": "Citește cerințele și răspunde în spațiile indicate."
+      "text": "Cite\u0219te cerin\u021bele \u0219i r\u0103spunde \u00een spa\u021biile indicate."
     },
     {
       "id": "block-heading",
@@ -30,8 +30,8 @@
       "locale": "ro-RO",
       "style": "unordered",
       "items": [
-        "Alege toate afirmațiile adevărate.",
-        "Justifică răspunsul final."
+        "Alege toate afirma\u021biile adev\u0103rate.",
+        "Justific\u0103 r\u0103spunsul final."
       ]
     },
     {
@@ -61,7 +61,7 @@
       "type": "inline_math",
       "locale": "ro-RO",
       "latex": "f(x)=x^2",
-      "accessibleText": "f de x este egal cu x la pătrat"
+      "accessibleText": "f de x este egal cu x la p\u0103trat"
     },
     {
       "id": "block-display-math",
@@ -77,7 +77,7 @@
       "type": "image",
       "locale": "ro-RO",
       "assetId": "asset-parabola-diagram",
-      "altText": "Graficul unei parabole cu vârful în origine",
+      "altText": "Graficul unei parabole cu v\u00e2rful \u00een origine",
       "caption": "Figura 1"
     },
     {
@@ -86,7 +86,7 @@
       "type": "pdf_reference",
       "locale": "ro-RO",
       "assetId": "asset-formula-sheet",
-      "accessibleLabel": "Fișă de formule, paginile 2 și 3",
+      "accessibleLabel": "Fi\u0219\u0103 de formule, paginile 2 \u0219i 3",
       "pageRange": {
         "start": 2,
         "end": 3
@@ -98,7 +98,7 @@
       "type": "audio",
       "locale": "ro-RO",
       "assetId": "asset-audio-instructions",
-      "accessibleLabel": "Instrucțiuni audio",
+      "accessibleLabel": "Instruc\u021biuni audio",
       "transcriptAssetId": "asset-audio-instructions-transcript"
     },
     {
@@ -107,7 +107,7 @@
       "type": "video",
       "locale": "ro-RO",
       "assetId": "asset-motion-demo",
-      "accessibleLabel": "Demonstrație video a mișcării",
+      "accessibleLabel": "Demonstra\u021bie video a mi\u0219c\u0103rii",
       "captionsAssetId": "asset-motion-demo-captions"
     },
     {
@@ -116,8 +116,8 @@
       "type": "callout",
       "locale": "ro-RO",
       "tone": "note",
-      "title": "Notă",
-      "text": "Poți folosi instrumentul de geometrie inclus."
+      "title": "Not\u0103",
+      "text": "Po\u021bi folosi instrumentul de geometrie inclus."
     },
     {
       "id": "block-code",
@@ -126,7 +126,7 @@
       "locale": "ro-RO",
       "code": "f = lambda x: x ** 2",
       "language": "python",
-      "accessibleLabel": "Definiția funcției în Python"
+      "accessibleLabel": "Defini\u021bia func\u021biei \u00een Python"
     },
     {
       "id": "block-shared-stimulus",
@@ -143,7 +143,7 @@
       "locale": "ro-RO",
       "toolKey": "geometry-lab",
       "snapshotAssetId": "asset-geometry-starter-snapshot",
-      "accessibleLabel": "Construcție inițială în laboratorul de geometrie"
+      "accessibleLabel": "Construc\u021bie ini\u021bial\u0103 \u00een laboratorul de geometrie"
     },
     {
       "id": "block-rule",
@@ -164,12 +164,12 @@
       "options": [
         {
           "id": "option-a",
-          "label": "Graficul este o dreaptă."
+          "label": "Graficul este o dreapt\u0103."
         },
         {
           "id": "option-b",
-          "label": "Graficul este o parabolă.",
-          "accessibleLabel": "Opțiunea B: graficul este o parabolă"
+          "label": "Graficul este o parabol\u0103.",
+          "accessibleLabel": "Op\u021biunea B: graficul este o parabol\u0103"
         }
       ],
       "shuffle": false
@@ -209,7 +209,7 @@
       "contentBlockIds": [
         "block-heading"
       ],
-      "trueLabel": "Adevărat",
+      "trueLabel": "Adev\u0103rat",
       "falseLabel": "Fals"
     },
     {
@@ -248,6 +248,17 @@
         "block-code"
       ],
       "entryMode": "both",
+      "maxLength": 500
+    },
+    {
+      "id": "interaction-math-collection",
+      "schemaVersion": 1,
+      "type": "math_collection",
+      "required": true,
+      "contentBlockIds": [
+        "block-inline-math"
+      ],
+      "collectionKind": "set",
       "maxLength": 500
     },
     {

@@ -122,10 +122,14 @@ Scaffold folders:
 - [integrations/teams](./integrations/teams) — Teams manifest template and notes.
 - [integrations/google-classroom](./integrations/google-classroom) — Classroom add-on route template and notes.
 
-See [KLEIN_SDK_PLAN.md](./KLEIN_SDK_PLAN.md) for the full technical roadmap.
+See [GEOGEBRA_V0_SDK_IMPLEMENTATION_PLAN.md](./GEOGEBRA_V0_SDK_IMPLEMENTATION_PLAN.md)
+for the live roadmap. The original restart plan is in
+[docs/archive](./docs/archive/README.md).
 
 See [docs/V0_API.md](./docs/V0_API.md) for the supported v0 subpath API reference.
 
 See [GEOGEBRA_V0_SDK_IMPLEMENTATION_PLAN.md](./GEOGEBRA_V0_SDK_IMPLEMENTATION_PLAN.md) for the current reduced v0 implementation plan and progress ledger.
 
-See [V0_DEPLOYMENT_READINESS.md](./V0_DEPLOYMENT_READINESS.md) for current deployment blockers and free/low-cost deployment strategies.
+See [V0_DEPLOYMENT_CHECKLIST.md](./V0_DEPLOYMENT_CHECKLIST.md) for current
+deployment blockers. The 2026-07-05 readiness scan is in
+[docs/archive](./docs/archive/README.md).

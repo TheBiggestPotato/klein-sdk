@@ -60,7 +60,7 @@ Checks before marking blocker 1 done:
 - [x] `git diff --check` passes in all four repos.
 - [ ] Each slice has a matching verification note in this checklist.
 - [x] No generated Playwright report/build/cache directory is left untracked.
-- [ ] No local-only seed or test flag is enabled in production config.
+- [x] No local-only seed or test flag is enabled in production config. *(Verified x-ray pass 0: `app.dev-seed.enabled` defaults false, and `ProductionConfigurationValidator` fails startup closed on any known placeholder secret, any secret under 32 chars, and the filesystem/stub artifact adapters. **Caveat:** the gate only runs when the `production` profile is active — activating it is itself a deployment step, tracked below.)*
 - [ ] Clean `git status --short` in all four repos.
 
 ## 2. SDK Packaging Strategy

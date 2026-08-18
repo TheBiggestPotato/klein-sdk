@@ -17,13 +17,11 @@
     "dist",
     "apps",
     "fixtures",
-    "docs",
+    "docs/ASSESSMENT_CONTRACT_V1.md",
+    "docs/V0_API.md",
     "integrations",
-    "GEOGEBRA_STACK_IMPLEMENTATION_PLAN.md",
     "GEOGEBRA_V0_SDK_IMPLEMENTATION_PLAN.md",
-    "V0_DEPLOYMENT_READINESS.md",
-    "WHITEBOARD_FEATURES.md",
-    "KLEIN_SDK_PLAN.md",
+    "V0_DEPLOYMENT_CHECKLIST.md",
     "README.md"
   ],
   "exports": {

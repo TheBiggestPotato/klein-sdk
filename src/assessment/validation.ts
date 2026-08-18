@@ -612,6 +612,23 @@ function validateInteraction(
       }
       break;
     }
+    case 'math_collection':
+      hasOnlyKeys(
+        record,
+        [...INTERACTION_BASE_KEYS, 'collectionKind', 'maxLength'],
+        path,
+        issues,
+      );
+      // The shape belongs to the question. `(1, 2)` is a vector in one and an
+      // open interval in another, and only this says which was asked.
+      requireEnum(
+        record.collectionKind,
+        ['set', 'vector', 'interval', 'matrix'] as const,
+        `${path}.collectionKind`,
+        issues,
+      );
+      requireInteger(record.maxLength, `${path}.maxLength`, issues, 1);
+      break;
     case 'math_expression':
       hasOnlyKeys(
         record,
@@ -800,6 +817,10 @@ function validateAtomicResponse(
       if (record.unit !== null) {
         requireString(record.unit, `${path}.unit`, issues);
       }
+      break;
+    case 'math_collection':
+      hasOnlyKeys(record, [...RESPONSE_BASE_KEYS, 'raw'], path, issues);
+      requireString(record.raw, `${path}.raw`, issues, { allowEmpty: true });
       break;
     case 'math_expression':
       hasOnlyKeys(record, [...RESPONSE_BASE_KEYS, 'raw', 'latex'], path, issues);

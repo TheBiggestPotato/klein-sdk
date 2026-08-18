@@ -43,6 +43,7 @@ export const ASSESSMENT_INTERACTION_TYPES = [
   'short_text',
   'numeric',
   'math_expression',
+  'math_collection',
   'extended_text',
   'file_photo',
   'tool_snapshot',
@@ -357,6 +358,17 @@ export interface AssessmentMathExpressionInteractionV1 extends AssessmentInterac
   readonly maxLength: number;
 }
 
+/**
+ * An answer made of several values. The shape belongs to the question, not to
+ * the answer: `(1, 2)` is a vector in one question and an open interval in
+ * another, and only `collectionKind` says which was asked.
+ */
+export interface AssessmentMathCollectionInteractionV1 extends AssessmentInteractionBaseV1 {
+  readonly type: 'math_collection';
+  readonly collectionKind: 'set' | 'vector' | 'interval' | 'matrix';
+  readonly maxLength: number;
+}
+
 export interface AssessmentExtendedTextInteractionV1 extends AssessmentInteractionBaseV1 {
   readonly type: 'extended_text';
   readonly maxLength: number;
@@ -397,6 +409,7 @@ type AssessmentInteractionShapeV1 =
   | AssessmentShortTextInteractionV1
   | AssessmentNumericInteractionV1
   | AssessmentMathExpressionInteractionV1
+  | AssessmentMathCollectionInteractionV1
   | AssessmentExtendedTextInteractionV1
   | AssessmentFilePhotoInteractionV1
   | AssessmentToolSnapshotInteractionV1
@@ -444,6 +457,11 @@ export interface AssessmentMathExpressionResponseV1 extends AssessmentResponseBa
   readonly latex: string | null;
 }
 
+export interface AssessmentMathCollectionResponseV1 extends AssessmentResponseBaseV1 {
+  readonly type: 'math_collection';
+  readonly raw: string;
+}
+
 export interface AssessmentExtendedTextResponseV1 extends AssessmentResponseBaseV1 {
   readonly type: 'extended_text';
   readonly text: string;
@@ -466,6 +484,7 @@ export type AssessmentAtomicResponseV1 = (
   | AssessmentShortTextResponseV1
   | AssessmentNumericResponseV1
   | AssessmentMathExpressionResponseV1
+  | AssessmentMathCollectionResponseV1
   | AssessmentExtendedTextResponseV1
   | AssessmentFilePhotoResponseV1
   | AssessmentToolSnapshotResponseV1
