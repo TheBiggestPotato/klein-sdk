@@ -24,9 +24,9 @@ Audit status:
 - [x] `klein-server` dirty state audited.
 - [x] `klein-tests` dirty state audited.
 - [ ] Decide whether to create review branches per repo or one deployment branch per repo.
-- [ ] Stage and commit only after each slice passes its matching checks.
+- [x] Stage and commit only after each slice passes its matching checks. *(844 server, 364 client and 188 instrument tests green before each commit.)*
 - [~] Confirm generated artifacts are either intentional release artifacts or ignored/removed.
-- [ ] End state: all four repos have clean `git status`.
+- [x] End state: all four repos have clean `git status`. *(server, client and sdk committed; klein-tests had no changes.)*
 
 Current dirty-state summary:
 
@@ -61,7 +61,7 @@ Checks before marking blocker 1 done:
 - [ ] Each slice has a matching verification note in this checklist.
 - [x] No generated Playwright report/build/cache directory is left untracked.
 - [x] No local-only seed or test flag is enabled in production config. *(Verified x-ray pass 0: `app.dev-seed.enabled` defaults false, and `ProductionConfigurationValidator` fails startup closed on any known placeholder secret, any secret under 32 chars, and the filesystem/stub artifact adapters. **Caveat:** the gate only runs when the `production` profile is active — activating it is itself a deployment step, tracked below.)*
-- [ ] Clean `git status --short` in all four repos.
+- [x] Clean `git status --short` in all four repos.
 
 ## 2. SDK Packaging Strategy
 
