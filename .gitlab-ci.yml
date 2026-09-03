@@ -47,6 +47,43 @@ quality:
     paths:
       - dist/
 
+# ---------------------------------------------------------------------------
+# Static analysis. Gated on a token existing, so a fork or a pipeline without
+# access passes rather than failing on a secret it was never given.
+#
+# allow_failure because this reports on the code; the test jobs decide whether
+# the code is releasable. An unreachable analysis server is not a merge blocker.
+# ---------------------------------------------------------------------------
+sonar:
+  stage: test
+  image:
+    name: sonarsource/sonar-scanner-cli:12.1.0.3233_8.0.1
+    entrypoint: [""]
+  timeout: 15m
+  needs: []
+  variables:
+    # A shallow clone makes every line look new, and "new code" conditions
+    # stop meaning anything.
+    GIT_DEPTH: "0"
+    SONAR_USER_HOME: "$CI_PROJECT_DIR/.sonar"
+    SONAR_PROJECT_KEY: "kleinmath_klein-sdk"
+  cache:
+    key: "sonar-$CI_COMMIT_REF_SLUG"
+    paths:
+      - .sonar/cache/
+    policy: pull-push
+  before_script: []
+  script:
+    - |
+      ORG_ARG=""
+      if [ -n "$SONAR_ORGANIZATION" ]; then
+        ORG_ARG="-Dsonar.organization=$SONAR_ORGANIZATION"
+      fi
+      sonar-scanner -Dsonar.projectKey="$SONAR_PROJECT_KEY" $ORG_ARG
+  allow_failure: true
+  rules:
+    - if: '$SONAR_TOKEN && $SONAR_HOST_URL'
+
 package-tarball:
   stage: package
   timeout: 10m
