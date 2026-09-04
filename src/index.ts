@@ -661,6 +661,8 @@ export type {
   ExamStopReason,
 } from './exam/index.js';
 
+export * from './assessment/index.js';
+
 export {
   createClassroomAddonRouteConfig,
   createClassroomIframeUrl,

@@ -105,6 +105,8 @@ import {
 } from './solids.js';
 
 export { assertGeometryLabInvariants, getGeometryLabInvariantIssues } from './invariants.js';
+export { computeGeometryInvariants, RELATIVE_TOLERANCE } from './gradable-invariants.js';
+export type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
 export { compactGeometryLabDelta, compactGeometryLabSnapshot } from './persistence.js';
 export { compileEquationSurface3D } from './equations.js';
 export {

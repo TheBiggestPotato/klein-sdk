@@ -1,4 +1,5 @@
 import { createIdFactory, createInstrumentRuntime, KleinSdkError } from '../core/index.js';
+import { KLEIN_UI_FONT_STACK } from '../theme/index.js';
 import type {
   ApplyDeltaOptions,
   DeltaMeta,
@@ -1072,7 +1073,7 @@ function exportGraphingSvg(
     const cy = yToScreen(point.y, viewport, height);
     parts.push(`<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="4" fill="${escapeAttribute(color)}"/>`);
     if (point.label) {
-      parts.push(`<text x="${(cx + 7).toFixed(2)}" y="${(cy - 7).toFixed(2)}" fill="${escapeAttribute(color)}" font-family="system-ui, sans-serif" font-size="12">${escapeHtml(point.label)}</text>`);
+      parts.push(`<text x="${(cx + 7).toFixed(2)}" y="${(cy - 7).toFixed(2)}" fill="${escapeAttribute(color)}" font-family="${escapeAttribute(KLEIN_UI_FONT_STACK)}" font-size="12">${escapeHtml(point.label)}</text>`);
     }
   }
 

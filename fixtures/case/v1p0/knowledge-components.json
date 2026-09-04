@@ -1,0 +1,67 @@
+{
+  "caseVersion" : "1.0",
+  "CFDocument" : {
+    "identifier" : "urn:klein:framework:knowledge-components",
+    "uri" : "urn:klein:framework:knowledge-components",
+    "title" : "Klein — componente de cunoaștere",
+    "creator" : "Casa Bună",
+    "lastChangeDateTime" : "2026-08-02T10:00:00Z",
+    "CFPackageURI" : {
+      "identifier" : "urn:klein:framework:knowledge-components",
+      "uri" : "urn:klein:framework:knowledge-components",
+      "title" : "Klein — componente de cunoaștere"
+    },
+    "subject" : [ "mathematics" ]
+  },
+  "CFItems" : [ {
+    "identifier" : "6f1b1f2a-0000-4000-8000-000000000001",
+    "uri" : "urn:klein:knowledge-component:math.arithmetic.addition",
+    "humanCodingScheme" : "math.arithmetic.addition",
+    "fullStatement" : "Adunare cu trecere peste ordin",
+    "notes" : "Adună numere naturale cu trecere peste ordin.",
+    "CFItemType" : "Knowledge Component",
+    "educationLevel" : [ "arithmetic" ],
+    "language" : "ro-RO",
+    "statusStartDate" : null,
+    "lastChangeDateTime" : "2026-08-01T10:00:00Z",
+    "extensions" : {
+      "klein:subject" : "mathematics",
+      "klein:domain" : "arithmetic",
+      "klein:status" : "active"
+    }
+  }, {
+    "identifier" : "6f1b1f2a-0000-4000-8000-000000000002",
+    "uri" : "urn:klein:knowledge-component:math.arithmetic.subtraction",
+    "humanCodingScheme" : "math.arithmetic.subtraction",
+    "fullStatement" : "Scădere cu împrumut",
+    "notes" : null,
+    "CFItemType" : "Knowledge Component",
+    "educationLevel" : [ "arithmetic" ],
+    "language" : "ro-RO",
+    "statusStartDate" : null,
+    "lastChangeDateTime" : "2026-08-02T10:00:00Z",
+    "extensions" : {
+      "klein:subject" : "mathematics",
+      "klein:domain" : "arithmetic",
+      "klein:status" : "active"
+    }
+  } ],
+  "CFAssociations" : [ {
+    "identifier" : "6f1b1f2a-0000-4000-8000-00000000000a",
+    "associationType" : "precedes",
+    "CFDocumentURI" : {
+      "identifier" : "urn:klein:framework:knowledge-components",
+      "uri" : "urn:klein:framework:knowledge-components"
+    },
+    "originNodeURI" : {
+      "uri" : "urn:klein:knowledge-component:math.arithmetic.addition"
+    },
+    "destinationNodeURI" : {
+      "uri" : "urn:klein:knowledge-component:math.arithmetic.subtraction"
+    },
+    "lastChangeDateTime" : "2026-08-03T10:00:00Z",
+    "extensions" : {
+      "klein:relationshipType" : "prerequisite"
+    }
+  } ]
+}

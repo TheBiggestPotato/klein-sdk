@@ -36,6 +36,37 @@ export interface KleinToolTheme {
   mathFontFamily: string;
 }
 
+/**
+ * The typefaces every Klein surface uses, declared once.
+ *
+ * <p>Before this existed there were six sans stacks and three maths stacks
+ * across the client and the SDK — Proxima Nova in the application, Inter in
+ * the tools, IBM Plex Sans in the geometry lab, bare `system-ui` in the
+ * whiteboard — so a page and the instrument embedded in it were set in
+ * different faces.
+ *
+ * <p>Proxima Nova leads because the application loads it. The fallbacks after
+ * it are not decoration: a tool can be exported to SVG, printed to PDF, or
+ * embedded in somebody else's page, and in all three the web font is absent.
+ * The chain is ordered so what arrives next is as close as the machine has.
+ */
+export const KLEIN_UI_FONT_STACK =
+  "'Proxima Nova', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+/**
+ * Mathematics, which is deliberately not the interface face.
+ *
+ * <p>KaTeX ships its own metrics and the whole point of them is that an
+ * integral sign and a fraction bar line up. Setting formulae in the interface
+ * font would look tidier in a screenshot and be wrong on the page.
+ */
+export const KLEIN_MATH_FONT_STACK =
+  "'KaTeX_Main', 'KaTeX_Math', 'STIX Two Math', 'Cambria Math', 'Latin Modern Math', serif";
+
+/** Where digits must line up: coordinates, matrices, code. */
+export const KLEIN_MONO_FONT_STACK =
+  "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace";
+
 export type KleinToolThemeInput = KleinToolThemeName | Partial<KleinToolTheme>;
 
 /** Klein application's default light palette. */
@@ -67,8 +98,8 @@ export const KLEIN_LIGHT_TOOL_THEME: KleinToolTheme = {
   axisY: '#76abae',
   axisZ: '#ff8a65',
   shadow: '0 1px 2px rgba(48, 56, 65, 0.06), 0 18px 48px rgba(48, 56, 65, 0.12)',
-  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  mathFontFamily: '"KaTeX_Main", "KaTeX_Math", "STIX Two Math", "Cambria Math", serif',
+  fontFamily: KLEIN_UI_FONT_STACK,
+  mathFontFamily: KLEIN_MATH_FONT_STACK,
 };
 
 /** Klein application's default dark palette. */
@@ -100,8 +131,8 @@ export const KLEIN_DARK_TOOL_THEME: KleinToolTheme = {
   axisY: '#76abae',
   axisZ: '#9cc4c6',
   shadow: '0 1px 2px rgba(0, 0, 0, 0.35), 0 18px 48px rgba(0, 0, 0, 0.36)',
-  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  mathFontFamily: '"KaTeX_Main", "KaTeX_Math", "STIX Two Math", "Cambria Math", serif',
+  fontFamily: KLEIN_UI_FONT_STACK,
+  mathFontFamily: KLEIN_MATH_FONT_STACK,
 };
 
 export function resolveKleinToolTheme(input: KleinToolThemeInput | undefined = 'light'): KleinToolTheme {

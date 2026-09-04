@@ -442,12 +442,12 @@ Required public helpers:
 - [x] Remove the standalone 3D calculator from client navigation and redirect legacy 3D URLs into Geometry Lab.
 - [x] Add smoke tests that verify nonblank SVG output and client rendering.
 - [ ] Add camera/view collaboration compaction beyond snapshot sync.
-- [ ] Add intersection algorithms and persisted intersection entities.
-- [ ] Add cross-section generation for cube/cuboid/prism/pyramid/cylinder/cone.
+- [x] Add intersection algorithms and persisted intersection entities. *(Verified x-ray pass 0: `geometryIntersectionPoint2D`, persisted `intersection` construction with `sourceIds` + `index`, recompute check in `canonicalize.ts`.)*
+- [x] Add cross-section generation for cube/cuboid/prism/pyramid/cylinder/cone. *(Verified x-ray pass 0: `crossSectionSolidMesh3D` in `solids.ts`, wired through `instrument.ts`, schema and invariants.)*
 - [ ] Add net generation for common solids beyond the existing solid metadata.
 - [ ] Add richer parametric surface samplers.
 - [ ] Add contour/marching support for broader implicit equations.
-- [ ] Add PNG/thumbnail export.
+- [ ] Add PNG/thumbnail export. *(x-ray pass 0: whiteboard already exports PNG and thumbnail; Geometry Lab has no export path. Remaining work is Geometry Lab only.)*
 - [ ] Post-v0: add Three.js/WebGL renderer adapter behind an interface.
 - [ ] Post-v0: add raycasting, advanced hit testing, work-plane snapping, and placement.
 - [ ] Post-v0: add WebGL renderer tests that verify a nonblank canvas and correct camera framing.
@@ -1041,7 +1041,7 @@ Server:
 - [x] Verify server compile/unit tests with Java/Maven.
 - [x] Verify server Docker-backed integration tests once Docker/Testcontainers is available.
 - [x] Add/confirm snapshot validators for `calculator`, `probability`, and the final Geometry Lab snapshot shape after server verification.
-- [ ] Add migration strategy if graphing snapshot schema moves from v1 to v2.
+- [ ] Add migration strategy if graphing snapshot schema moves from v1 to v2. *(x-ray pass 0: the mechanism exists and is exported — `SnapshotMigration`, `migrateSnapshot`. Nothing to migrate yet; this stays open until a v2 exists.)*
 
 Client:
 
