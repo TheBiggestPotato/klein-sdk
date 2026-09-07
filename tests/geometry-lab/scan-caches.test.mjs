@@ -21,6 +21,7 @@ import {
   resolveGeometryLabComplexityLimits,
 } from '../../dist/geometry-lab/complexity.js';
 import { validateGeometryLabSnapshotStrict } from '../../dist/geometry-lab/schema.js';
+import { getGeometryLabInvariantIssues } from '../../dist/geometry-lab/invariants.js';
 import { createGeometryLab } from '../../dist/geometry-lab/index.js';
 
 function meshSnapshot() {
@@ -173,6 +174,76 @@ test('the issue budget still truncates after a cached clean pass', () => {
   broken.scene.scene3d.points[keys[0]].x = null;
   broken.scene.scene3d.points[keys[1]].y = null;
   assert.equal(validateGeometryLabSnapshotStrict(broken, 1).issues.length, 1);
+});
+
+/* -------------------------------------------------------------------------- */
+/* Mesh array caches (task 0.11)                                              */
+/* -------------------------------------------------------------------------- */
+
+test('a broken vertex is reported however many times the mesh is checked', () => {
+  const broken = clone();
+  const surface = Object.values(broken.scene.scene3d.entities).find(e => e.kind === 'surface3d');
+  surface.vertices[7].y = null;
+  for (let pass = 0; pass < 3; pass += 1) {
+    assert.equal(getGeometryLabInvariantIssues(broken).length > 0, true, `pass ${pass}`);
+    assert.equal(validateGeometryLabSnapshotStrict(broken, 100).ok, false, `pass ${pass}`);
+  }
+});
+
+test('an out-of-bounds face index is reported', () => {
+  const broken = clone();
+  const surface = Object.values(broken.scene.scene3d.entities).find(e => e.kind === 'surface3d');
+  surface.faces[3] = [0, 1, surface.vertices.length + 50];
+  const issues = getGeometryLabInvariantIssues(broken);
+  assert.ok(issues.some(i => i.message.includes('out of bounds')));
+});
+
+test('the same face array against a shorter vertex array is re-checked', () => {
+  // The face cache records the vertex count it was cleared against, because the
+  // bounds check depends on it. Sharing one face array between a long mesh and
+  // a truncated one is the case that catches a cache which forgets that.
+  const ok = clone();
+  const surface = Object.values(ok.scene.scene3d.entities).find(e => e.kind === 'surface3d');
+  const sharedFaces = surface.faces;
+  const fullVertices = surface.vertices;
+
+  surface.faces = sharedFaces;
+  surface.vertices = fullVertices;
+  assert.deepEqual(getGeometryLabInvariantIssues(ok), [], 'the full mesh is sound');
+
+  const truncated = clone();
+  const other = Object.values(truncated.scene.scene3d.entities).find(e => e.kind === 'surface3d');
+  other.faces = sharedFaces;
+  other.vertices = fullVertices.slice(0, 4);
+  const issues = getGeometryLabInvariantIssues(truncated);
+  assert.ok(
+    issues.some(i => i.message.includes('out of bounds')),
+    'the same faces against fewer vertices must be re-checked, not cleared by the cache',
+  );
+
+  assert.deepEqual(getGeometryLabInvariantIssues(ok), [], 'and the sound mesh is still sound');
+});
+
+test('mesh checks survive an edit that rebuilds the surface object', () => {
+  // Canonicalization rebuilds every entity object per delta while reattaching
+  // the same mesh arrays, which is exactly why these caches key on the arrays.
+  const lab = createGeometryLab();
+  lab.addSurfaceZ({
+    xRange: [-5, 5], yRange: [-5, 5], xSamples: 24, ySamples: 24,
+    input: 'z = sin(x)', z: (x, y) => Math.sin(x) * Math.cos(y),
+  });
+  const id = lab.addPoint3D({ x: 0, y: 0, z: 0 });
+
+  const first = lab.peekSnapshot().scene.scene3d.entities;
+  const surfaceKey = Object.keys(first).find(k => first[k].kind === 'surface3d');
+  const verticesBefore = first[surfaceKey].vertices;
+
+  lab.applyDelta({ op: 'updatePoint', id, changes: { x: 5 } });
+
+  const second = lab.peekSnapshot().scene.scene3d.entities;
+  assert.notEqual(second[surfaceKey], first[surfaceKey], 'the entity object is rebuilt');
+  assert.equal(second[surfaceKey].vertices, verticesBefore, 'the mesh array is reattached, not rebuilt');
+  assert.deepEqual(getGeometryLabInvariantIssues(lab.peekSnapshot()), []);
 });
 
 /* -------------------------------------------------------------------------- */

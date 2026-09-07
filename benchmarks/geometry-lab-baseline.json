@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "calibrationMs": 48.9113,
+  "calibrationMs": 48.8915,
   "gcAvailable": true,
   "samples": 25,
   "cases": {
@@ -13,10 +13,10 @@
         "P4"
       ],
       "budgetMs": 4,
-      "medianMs": 3.7245,
-      "normalizedTime": 0.07615,
+      "medianMs": 3.7143,
+      "normalizedTime": 0.07597,
       "retainedHeapBytes": 345568,
-      "churnHeapBytes": 11484984,
+      "churnHeapBytes": 20110440,
       "withinBudget": true
     },
     "drag-fanout-400": {
@@ -26,10 +26,10 @@
         "P3"
       ],
       "budgetMs": 4,
-      "medianMs": 5.5572,
-      "normalizedTime": 0.11362,
+      "medianMs": 5.4739,
+      "normalizedTime": 0.11196,
       "retainedHeapBytes": 9627984,
-      "churnHeapBytes": 18489312,
+      "churnHeapBytes": 18613624,
       "withinBudget": false
     },
     "drag-mesh-4-surfaces": {
@@ -38,11 +38,11 @@
         "P11"
       ],
       "budgetMs": 4,
-      "medianMs": 11.0259,
-      "normalizedTime": 0.22543,
-      "retainedHeapBytes": 21776,
-      "churnHeapBytes": 14829752,
-      "withinBudget": false
+      "medianMs": 0.7911,
+      "normalizedTime": 0.01618,
+      "retainedHeapBytes": 52608,
+      "churnHeapBytes": 24012584,
+      "withinBudget": true
     },
     "snapshot-read-mesh": {
       "title": "getSnapshot() on a 4-surface scene",
@@ -50,10 +50,10 @@
         "P6"
       ],
       "budgetMs": 4,
-      "medianMs": 11.6287,
-      "normalizedTime": 0.23775,
+      "medianMs": 11.6083,
+      "normalizedTime": 0.23743,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 27192768,
+      "churnHeapBytes": 27192864,
       "withinBudget": false
     },
     "delta-roundtrip-500": {
@@ -62,10 +62,10 @@
         "P5"
       ],
       "budgetMs": 0.5,
-      "medianMs": 3.4793,
-      "normalizedTime": 0.07113,
+      "medianMs": 3.5597,
+      "normalizedTime": 0.07281,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 10010768,
+      "churnHeapBytes": 10534496,
       "withinBudget": false
     },
     "snapshot-read-500": {
@@ -74,20 +74,20 @@
         "P6"
       ],
       "budgetMs": 0.5,
-      "medianMs": 0.5174,
-      "normalizedTime": 0.01058,
+      "medianMs": 0.5226,
+      "normalizedTime": 0.01069,
       "retainedHeapBytes": 600,
-      "churnHeapBytes": 9596952,
+      "churnHeapBytes": 9546952,
       "withinBudget": false
     },
     "export-svg-500": {
       "title": "SVG render of a 500-point 3D scene",
       "findings": [],
       "budgetMs": 16,
-      "medianMs": 1.9695,
-      "normalizedTime": 0.04027,
+      "medianMs": 1.9418,
+      "normalizedTime": 0.03972,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 28238736,
+      "churnHeapBytes": 28239864,
       "withinBudget": true
     },
     "invariants-24": {
@@ -96,10 +96,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 0.2745,
-      "normalizedTime": 0.00561,
-      "retainedHeapBytes": 57432,
-      "churnHeapBytes": 1954208,
+      "medianMs": 0.2728,
+      "normalizedTime": 0.00558,
+      "retainedHeapBytes": 58736,
+      "churnHeapBytes": 1030744,
       "withinBudget": true
     }
   },
@@ -114,10 +114,10 @@
         100,
         400
       ],
-      "smallMs": 0.7738,
-      "largeMs": 2.5948,
-      "timeExponent": 0.873,
-      "heapExponent": -0.716,
+      "smallMs": 0.7532,
+      "largeMs": 2.61,
+      "timeExponent": 0.896,
+      "heapExponent": -0.319,
       "meetsTarget": false
     },
     "scale-drag-fanout": {
@@ -131,9 +131,9 @@
         100,
         400
       ],
-      "smallMs": 1.283,
-      "largeMs": 5.333,
-      "timeExponent": 1.028,
+      "smallMs": 1.2621,
+      "largeMs": 5.3252,
+      "timeExponent": 1.039,
       "heapExponent": 0.982,
       "meetsTarget": true
     },
@@ -147,9 +147,9 @@
         100,
         400
       ],
-      "smallMs": 0.0683,
-      "largeMs": 0.4075,
-      "timeExponent": 1.288,
+      "smallMs": 0.0672,
+      "largeMs": 0.4032,
+      "timeExponent": 1.292,
       "heapExponent": null,
       "meetsTarget": false
     }

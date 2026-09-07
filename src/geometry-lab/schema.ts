@@ -1266,12 +1266,53 @@ function vector2Array(value: unknown, path: string, context: ValidationContext):
   array(value, path, context, vector2Object);
 }
 
-function vector3Array(value: unknown, path: string, context: ValidationContext): void {
+/**
+ * Mesh arrays that already validated cleanly.
+ *
+ * <p>Keyed on the array rather than on the entity holding it, because the array
+ * is what survives an edit. Canonicalization rebuilds every entity object each
+ * delta - it strips the meshes, clones the rest, and reattaches the original
+ * arrays by reference - so an entity-keyed cache never hits, while the vertex
+ * and face arrays inside it are the very same objects as before. Those arrays
+ * are also the only part big enough to be worth remembering.
+ */
+const cleanlyValidatedMeshArrays = new WeakMap<object, Set<ValueValidator>>();
+
+function cachedArrayValidation(
+  value: unknown,
+  path: string,
+  context: ValidationContext,
+  validator: ValueValidator,
+): void {
+  if (value === null || typeof value !== 'object') {
+    validator(value, path, context);
+    return;
+  }
+  const passed = cleanlyValidatedMeshArrays.get(value as object);
+  if (passed?.has(validator)) return;
+
+  const issuesBefore = context.issues.length;
+  validator(value, path, context);
+  if (context.issues.length !== issuesBefore) return;
+
+  if (passed) passed.add(validator);
+  else cleanlyValidatedMeshArrays.set(value as object, new Set([validator]));
+}
+
+function vector3ArrayUncached(value: unknown, path: string, context: ValidationContext): void {
   array(value, path, context, vector3Object);
 }
 
-function faceIndexArray(value: unknown, path: string, context: ValidationContext): void {
+function vector3Array(value: unknown, path: string, context: ValidationContext): void {
+  cachedArrayValidation(value, path, context, vector3ArrayUncached);
+}
+
+function faceIndexArrayUncached(value: unknown, path: string, context: ValidationContext): void {
   array(value, path, context, (face, facePath, faceContext) => array(face, facePath, faceContext, nonNegativeInteger));
+}
+
+function faceIndexArray(value: unknown, path: string, context: ValidationContext): void {
+  cachedArrayValidation(value, path, context, faceIndexArrayUncached);
 }
 
 function increasingRange(value: unknown, path: string, context: ValidationContext): void {

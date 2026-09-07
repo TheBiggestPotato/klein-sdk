@@ -12,7 +12,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
-| 0 - Performance foundation | 8 | 11 | 0.1, 0.2, 0.4, 0.5, 0.6, 0.8, 0.9, 0.10 landed; 0.3 declined; 0.7 blocked; 0.11 opened from 0.10 |
+| 0 - Performance foundation | 9 | 11 | All landed except 0.3 (declined on measurement) and 0.7 (blocked by the JSON contract) |
 | 1 - Make 3D dynamic | 0 | 6 | Blocked on 0.2-0.4 |
 | 2 - Close the 2D gap | 0 | 5 | |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
@@ -148,10 +148,12 @@ Moving one unrelated point in a four-surface scene cost 28.7 ms, 62% of it the
 generic untrusted-input JSON walk inside the complexity assertion. This is the
 finding P8 was reaching for, and it is much larger than the storage format.
 
-**Mostly addressed by task 0.10**, which took the complexity scan from 17.9 ms
-to 0.32 ms and schema validation from 7.0 ms to 0.01 ms, bringing the edit to
-10.6 ms. The remaining ~7 ms is unattributed and is task 0.11. The benchmark now
-carries `drag-mesh-4-surfaces`, so this no longer hides.
+**Closed by tasks 0.10 and 0.11.** 0.10 took the complexity scan from 17.9 ms to
+0.32 ms and schema validation from 7.0 ms to 0.01 ms; 0.11 found that the
+surface entity objects are rebuilt on every delta while their mesh arrays are
+reattached by reference, and moved the remaining caches onto the arrays. The
+edit is now **0.78 ms, down from 28.7 ms - 37x** - and inside budget. The
+benchmark carries `drag-mesh-4-surfaces`, so this can no longer hide.
 
 ### P8. Mesh geometry stored as object arrays
 
@@ -456,15 +458,36 @@ feature. Nothing here is user-visible.
   in the instrument wrapper, is not history (measured with history disabled: no
   change), and needs its own profile. Tracked as task 0.11.
 
-- [ ] **0.11 Find the rest of the mesh-scene delta cost.** After 0.10,
-  `drag-mesh-4-surfaces` is 10.6 ms while `reduceOwnedGeometryLabDelta` measures
-  3.45 ms and the three whole-snapshot passes sum to 3.5 ms. Roughly 7 ms is
-  unattributed, somewhere between `GeometryLabInstrument.applyDelta` and the
-  reducer. Ruled out so far: history capture, equation-surface cache
-  canonicalization, delta complexity assertion, and rendering (the instrument is
-  unmounted in the benchmark). Profile before changing anything - three of the
-  seven Phase 0 tasks so far were scoped from assumptions that measurement
-  overturned.
+- [x] **0.11 Cache mesh checks on the arrays, not the entities.** Profiled
+  first, and the profile named something none of the guesses had: **the surface
+  entity objects are rebuilt on every delta**, so all three of task 0.10's
+  identity caches missed on them.
+
+  `cloneSnapshot(snapshot, reuseSurfaceMeshCaches: true)` in `canonicalize.ts`
+  strips the meshes, JSON-clones what is left, and reattaches the original
+  vertex and face arrays by reference. The arrays survive an edit; the entity
+  objects holding them do not. So an entity-keyed cache can never hit, while an
+  array-keyed one always does - and the arrays are the only part big enough to
+  matter.
+
+  Three caches moved onto the arrays: `vector3Array` and `faceIndexArray` in
+  `schema.ts`, and the vertex and face walks in `checkSurface`
+  (`invariants.ts`). The face cache additionally records the vertex count it was
+  cleared against, because the out-of-bounds check depends on it - the same face
+  array against a shorter vertex array is a different question, and is
+  re-checked. There is a test for exactly that.
+
+  **Result:** `drag-mesh-4-surfaces` **10.6 ms → 0.78 ms**, and inside its 4 ms
+  budget. End to end that case is 28.7 ms → 0.78 ms, **37x**.
+
+  Verified against the previous build over both corpora - 29 schema validations
+  and 169 graph, invariant and cascade records across 13 scenes, 11 of them
+  deliberately corrupt - identical in both.
+
+  One thing this did not do: `snapshot-read-mesh` is 11.6 ms, which is
+  `getSnapshot()` deep-cloning by design. `peekSnapshot()` from task 0.6 is the
+  answer for hosts that only read, and the case is kept in the benchmark to keep
+  the cost of the isolation contract visible.
 - [x] **0.9 Cheaper integrity checking.** *Added after the task 0.5 profile, and
   solved differently from how it was scoped.*
 

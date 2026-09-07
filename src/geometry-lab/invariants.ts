@@ -254,8 +254,46 @@ function checkSolid(solid: SolidEntity, path: string, pointIds: Set<string>, iss
   checkOptionalFinite(solid.surfaceArea, `${path}.surfaceArea`, issues);
 }
 
+/**
+ * Mesh arrays whose integrity has already been established.
+ *
+ * <p>Keyed on the arrays rather than on the surface, because canonicalization
+ * rebuilds the surface object on every edit while reattaching these same arrays
+ * by reference - so a surface-keyed cache would never hit. Only clean results
+ * are remembered, so a malformed mesh is reported every time.
+ *
+ * <p>Faces additionally record the vertex count they were checked against,
+ * since the bounds check below depends on it: the same face array against a
+ * shorter vertex array is a different question and is re-checked.
+ */
+const checkedSurfaceVertices = new WeakSet<object>();
+const checkedSurfaceFaces = new WeakMap<object, number>();
+
 function checkSurface(surface: SurfaceEntity3D, path: string, issues: ValidationIssue[]): void {
-  surface.vertices.forEach((vertex, index) => checkVector3(vertex, `${path}.vertices[${index}]`, issues));
+  if (!checkedSurfaceVertices.has(surface.vertices)) {
+    const before = issues.length;
+    surface.vertices.forEach((vertex, index) => checkVector3(vertex, `${path}.vertices[${index}]`, issues));
+    if (issues.length === before) checkedSurfaceVertices.add(surface.vertices);
+  }
+
+  if (checkedSurfaceFaces.get(surface.faces) !== surface.vertices.length) {
+    const before = issues.length;
+    checkSurfaceFaces(surface, path, issues);
+    if (issues.length === before) checkedSurfaceFaces.set(surface.faces, surface.vertices.length);
+  }
+  for (const [axis, range] of Object.entries(surface.domain ?? {})) {
+    if (!range) continue;
+    checkFinite(range[0], `${path}.domain.${axis}[0]`, issues);
+    checkFinite(range[1], `${path}.domain.${axis}[1]`, issues);
+    if (range[1] <= range[0]) addIssue(issues, `${path}.domain.${axis}`, 'Surface domain ranges must be increasing.');
+  }
+  for (const [axis, samples] of Object.entries(surface.samples ?? {})) {
+    if (samples !== undefined) checkPositiveInteger(samples, `${path}.samples.${axis}`, issues);
+  }
+}
+
+/** The face half of {@link checkSurface}, split out so it can be cached on its own. */
+function checkSurfaceFaces(surface: SurfaceEntity3D, path: string, issues: ValidationIssue[]): void {
   for (let faceIndex = 0; faceIndex < surface.faces.length; faceIndex += 1) {
     const face = surface.faces[faceIndex];
     if (!face) continue;
@@ -267,15 +305,6 @@ function checkSurface(surface: SurfaceEntity3D, path: string, issues: Validation
         addIssue(issues, `${facePath}[${indexPosition}]`, `Surface vertex index ${index} is out of bounds.`);
       }
     });
-  }
-  for (const [axis, range] of Object.entries(surface.domain ?? {})) {
-    if (!range) continue;
-    checkFinite(range[0], `${path}.domain.${axis}[0]`, issues);
-    checkFinite(range[1], `${path}.domain.${axis}[1]`, issues);
-    if (range[1] <= range[0]) addIssue(issues, `${path}.domain.${axis}`, 'Surface domain ranges must be increasing.');
-  }
-  for (const [axis, samples] of Object.entries(surface.samples ?? {})) {
-    if (samples !== undefined) checkPositiveInteger(samples, `${path}.samples.${axis}`, issues);
   }
 }
 
