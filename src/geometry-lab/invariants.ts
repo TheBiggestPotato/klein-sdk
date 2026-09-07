@@ -1,8 +1,8 @@
 import { KleinSdkError } from '../core/index.js';
 import type { JsonValue, ValidationIssue, Vector2, Vector3 } from '../core/index.js';
 import type { GeometryConstruction, GeometryConstraint, GeometryEntity, GeometryPoint } from '../geometry-core/index.js';
-import { buildGeometryLabDependencyGraph } from './dependencies.js';
-import type { GeometryLabDependencyGraph, GeometryLabDependencyKey } from './dependencies.js';
+import { buildGeometryLabIntegrityView } from './dependencies.js';
+import type { GeometryLabDependencyKey, GeometryLabIntegrityView } from './dependencies.js';
 import type {
   GeometryEntity3D,
   GeometryLabSnapshot,
@@ -463,7 +463,10 @@ function checkSelection(
 }
 
 function checkDependencyGraph(snapshot: GeometryLabSnapshot, issues: ValidationIssue[]): void {
-  const graph = buildGeometryLabDependencyGraph(snapshot);
+  // The lean view rather than the full graph: this check reads node paths,
+  // forward adjacency and ownership conflicts, and the full graph builds nine
+  // further indexes nothing here touches - on every edit.
+  const graph = buildGeometryLabIntegrityView(snapshot);
   for (const conflict of graph.ownershipConflicts) {
     const node = graph.nodesByKey[conflict.ownedKey];
     addIssue(
@@ -483,7 +486,7 @@ function checkDependencyGraph(snapshot: GeometryLabSnapshot, issues: ValidationI
   }
 }
 
-function dependencyCycles(graph: GeometryLabDependencyGraph): GeometryLabDependencyKey[][] {
+function dependencyCycles(graph: GeometryLabIntegrityView): GeometryLabDependencyKey[][] {
   const states = new Map<GeometryLabDependencyKey, 'active' | 'done'>();
   const stack: GeometryLabDependencyKey[] = [];
   const cycles = new Map<string, GeometryLabDependencyKey[]>();
@@ -504,7 +507,8 @@ function dependencyCycles(graph: GeometryLabDependencyGraph): GeometryLabDepende
     states.set(key, 'done');
   };
 
-  for (const key of Object.keys(graph.nodesByKey).sort() as GeometryLabDependencyKey[]) visit(key);
+  // Already sorted by the view, so no second sort of every node key.
+  for (const key of graph.sortedKeys) visit(key);
   return [...cycles.values()].sort((first, second) => first.join('\u0000').localeCompare(second.join('\u0000')));
 }
 

@@ -12,7 +12,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
-| 0 - Performance foundation | 4 | 9 | 0.1 measured; 0.4 removed the quadratic; 0.5 and 0.2 landed; 0.3 measured and declined; 0.9 is the remaining win |
+| 0 - Performance foundation | 5 | 9 | 0.1, 0.2, 0.4, 0.5, 0.9 landed; 0.3 measured and declined; 0.6-0.8 open |
 | 1 - Make 3D dynamic | 0 | 6 | Blocked on 0.2-0.4 |
 | 2 - Close the 2D gap | 0 | 5 | |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
@@ -119,8 +119,13 @@ time on the public path at `reducer.ts:141`.
 
 **Understated as written.** Profiling for task 0.5 found five full passes per
 delta, not three, and the complexity assertion is not the largest of them - the
-cross-record integrity scan is. See [Section 2b](#2b-per-delta-profile). Task
-0.5 removed one assertion from the owned path; task 0.9 covers the rest.
+cross-record integrity scan is. See [Section 2b](#2b-per-delta-profile).
+
+Task 0.5 removed one assertion from the owned path. Task 0.9 then made the
+integrity scan 2.3x cheaper - by not building the nine graph indexes it never
+reads, rather than by making it incremental, so it remains a full pass with no
+staleness risk. Four full passes per delta remain; they are simply much cheaper
+ones.
 
 ### P6. Deep clone on every snapshot read
 
@@ -212,11 +217,16 @@ was scoped from a budget miss rather than from a profile. Stages inside
 
 | Stage | Cost | Share | Notes |
 | --- | --: | --: | --- |
-| `getGeometryLabInvariantIssues` | 0.98 ms | 38% | Full cross-record integrity scan |
+| `getGeometryLabInvariantIssues` | 0.98 ms | 38% | Full cross-record integrity scan. **2.3x cheaper after task 0.9** |
 | `assertSnapshotComplexity` x2 | 0.77 ms | 30% | One removed by task 0.5 |
-| `validateGeometryLabSnapshotStrict` | 0.32 ms | 12% | Full shape validation |
+| `validateGeometryLabSnapshotStrict` | 0.32 ms | 12% | Full shape validation. Still untouched |
 | `canonicalizeGeometryLabSnapshot` | 0.32 ms | 12% | Includes the 2D recompute |
 | `diffGeometryLabHistory` | 0.06 ms | 2% | |
+
+Task 0.9 profiled one level deeper and found 88% of the integrity scan was the
+dependency graph build, not the per-record checks the task had assumed - which
+is why it was solved by building fewer indexes rather than by making a safety
+check incremental.
 
 Every one of these is a full pass over the whole snapshot, run on every edit, to
 check things that only changed locally. That is finding P5, and it is larger
@@ -340,19 +350,49 @@ feature. Nothing here is user-visible.
 - [ ] **0.8 History budget.** Lower `maxHistoryEntryBytes` and `maxHistoryBytes`
   toward the Section 3 targets, and store patches structurally rather than as
   serialized JSON where the diff is small (P7).
-- [ ] **0.9 Incremental integrity and shape checking.** *Added after the task
-  0.5 profile.* `getGeometryLabInvariantIssues` and
-  `validateGeometryLabSnapshotStrict` rescan the entire snapshot on every edit;
-  together they are half the cost of a delta. The id sets and duplicate-id
-  detection are inherently O(N) but cheap; the expensive part is the per-record
-  reference checking, which for an add or an update only needs to cover the
-  records the delta touched. A **delete still needs a full pass**, because
-  removing an id can dangle a reference from a record the delta never touched -
-  unless the reverse-dependency graph from task 0.2 is used to find exactly
-  those. These are safety checks: scope this with the same
-  differential-equivalence testing used for task 0.4, comparing incremental
-  against full results over a corpus of scenes and deltas, including
-  deliberately corrupt ones.
+- [x] **0.9 Cheaper integrity checking.** *Added after the task 0.5 profile, and
+  solved differently from how it was scoped.*
+
+  The task assumed per-record reference checking was the expensive part, and
+  proposed scoping it to the records a delta touched - accepting that deletes
+  would still need a full pass, and that a safety check made incremental can
+  fail silently. Profiling first showed the premise was wrong: **88% of
+  `getGeometryLabInvariantIssues` was `buildGeometryLabDependencyGraph`**, and
+  the per-record checks were 0.25 ms of 2.0 ms. So none of that risk was
+  necessary.
+
+  What the scan actually needs from the graph is three things: node paths for
+  issue messages, forward adjacency for cycle detection, and ownership
+  conflicts. The full graph materialises twelve indexes - six adjacency records
+  with an array per node, two sorted edge lists, two id-keyed views - and the
+  scan reads none of the other nine. `buildGeometryLabIntegrityView` builds only
+  those three, from the same population code as the full graph so the two cannot
+  drift. Two further fixes: `finish()` sorted the same key list six times per
+  graph and now sorts once, the edge comparators compare field by field instead
+  of building two strings per comparison, and `geometryLabDependencyKey` skips
+  `encodeURIComponent` for ids that would come back unchanged.
+
+  **The scan is still a full pass over every record. Nothing was made
+  incremental, so there is no staleness risk and no class of corruption that can
+  now slip through.**
+
+  **Result:** `getGeometryLabInvariantIssues` 2.3x across all sizes (2.02 ms →
+  0.88 ms at 500 objects, 9.05 → 3.89 at 2,000). The full graph build is 1.4x
+  faster too, which delete planning and the object panel also get.
+  `drag-chain-500` 4.80 ms → 3.71 ms, **the first edit path inside its budget**;
+  `delta-roundtrip-500` 4.57 → 3.20 ms.
+
+  Verified by dumping the full graph, every invariant issue and twelve cascade
+  plans per scene across 13 scenes - 11 of them deliberately corrupt, one per
+  class the scan detects - and diffing against the previous build: identical.
+  The key fast path was checked exhaustively against `encodeURIComponent` over
+  24,588 ids. Tests assert both halves: the lean view agrees with the full graph
+  on valid *and* corrupt scenes, and every corruption class is still reported -
+  the half a happy-path corpus would never establish, since a scan that stops
+  reporting looks exactly like a clean scene.
+
+  Not done, and left for later: `validateGeometryLabSnapshotStrict` is 0.32 ms
+  of a delta and untouched.
 
 Exit criteria: benchmark gate green in CI; single-point drag on a 500-object
 scene inside the 4 ms and 2 MB budgets; `scale-drag-chain` at or below 0.2 and
