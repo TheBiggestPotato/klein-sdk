@@ -168,6 +168,69 @@ test('a derived point with a missing source is left alone', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Canonicalization shares records without leaking writes (task 0.12)        */
+/* -------------------------------------------------------------------------- */
+
+test('canonicalization never writes into the snapshot it was given', () => {
+  // It now hands back a structural copy that shares record objects with the
+  // input, so "does not mutate the input" stops being obvious and starts being
+  // something to prove. Undo, history and collaboration all hold older
+  // snapshots and depend on it.
+  const lab = createGeometryLab();
+  const a = lab.addPoint3D({ x: 0, y: 0, z: 0 });
+  const b = lab.addPoint3D({ x: 4, y: 0, z: 0 });
+  const c = lab.addPoint3D({ x: 0, y: 3, z: 0 });
+  lab.addSegment3D(a, b);
+  const plane = lab.addWorkPlaneByThreePoints([a, b, c]);
+  lab.addWorkPlaneParallelToPlane(plane, { x: 0, y: 0, z: 2 });
+  // A line that actually crosses the xy plane, rather than lying in it.
+  const below = lab.addPoint3D({ x: 2, y: 2, z: -4 });
+  const above = lab.addPoint3D({ x: 2, y: 2, z: 4 });
+  lab.addLinePlaneIntersection(lab.addLine3D(below, above), 'xy');
+  const A = lab.addPoint2D({ x: 0, y: 0 });
+  const B = lab.addPoint2D({ x: 6, y: 0 });
+  lab.addMidpoint2D(A, B);
+
+  const held = lab.getSnapshot();
+  const serialized = JSON.stringify(held);
+
+  for (let index = 0; index < 5; index += 1) {
+    lab.applyDelta({ op: 'updatePoint', id: b, changes: { x: 4 + index } });
+  }
+
+  assert.equal(JSON.stringify(held), serialized, 'a snapshot taken earlier must be untouched by later edits');
+});
+
+test('an earlier snapshot keeps its own values when a shared record is recomputed', () => {
+  const lab = createGeometryLab();
+  const a = lab.addPoint2D({ x: 0, y: 0 });
+  const b = lab.addPoint2D({ x: 10, y: 0 });
+  const mid = lab.addMidpoint2D(a, b);
+
+  const first = lab.getSnapshot();
+  assert.equal(first.scene.scene2d.points[mid].x, 5);
+
+  lab.applyDelta({ op: 'updatePoint', id: b, changes: { x: 100 } });
+
+  assert.equal(first.scene.scene2d.points[mid].x, 5, 'the held snapshot did not move');
+  assert.equal(lab.getSnapshot().scene.scene2d.points[mid].x, 50);
+});
+
+test('undo still restores exactly, with records shared', () => {
+  const lab = createGeometryLab();
+  const a = lab.addPoint2D({ x: 0, y: 0 });
+  const b = lab.addPoint2D({ x: 10, y: 0 });
+  const mid = lab.addMidpoint2D(a, b);
+  const before = JSON.stringify(lab.getSnapshot().scene.scene2d);
+
+  lab.applyDelta({ op: 'updatePoint', id: b, changes: { x: 30 } });
+  assert.equal(lab.getSnapshot().scene.scene2d.points[mid].x, 15);
+
+  lab.undo();
+  assert.equal(JSON.stringify(lab.getSnapshot().scene.scene2d), before);
+});
+
+/* -------------------------------------------------------------------------- */
 /* Complexity bounds still hold on the owned fast path (task 0.5)             */
 /* -------------------------------------------------------------------------- */
 

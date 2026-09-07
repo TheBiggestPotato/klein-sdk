@@ -470,22 +470,32 @@ function canonicalWorkPlane(scene: GeometryScene3D, plane: WorkPlane3D): WorkPla
 
   if (source.kind === 'perpendicularLine') {
     const line = lineDataForEntity(scene, source.sourceEntityId, plane.id);
-    const origin = throughPoint(scene, source, tupleToVector3(plane.origin), plane.id);
-    return buildWorkPlane(plane, equationFromPointNormal(origin, line.direction), origin);
+    // `throughPoint` records the resolved origin on the source. Snapshots share
+    // record objects now rather than deep-copying them, so it is given a source
+    // this plane owns, and that copy is what the rebuilt plane carries.
+    const ownedSource = { ...source };
+    const origin = throughPoint(scene, ownedSource, tupleToVector3(plane.origin), plane.id);
+    return buildWorkPlane(
+      { ...plane, source: ownedSource },
+      equationFromPointNormal(origin, line.direction),
+      origin,
+    );
   }
 
   const sourcePlane = planeDataForReference(scene, source.sourcePlaneId, plane.id);
-  const origin = throughPoint(scene, source, tupleToVector3(plane.origin), plane.id);
+  const ownedPlaneSource = { ...source };
+  const owningPlane = { ...plane, source: ownedPlaneSource };
+  const origin = throughPoint(scene, ownedPlaneSource, tupleToVector3(plane.origin), plane.id);
   if (source.kind === 'parallelPlane') {
     return buildWorkPlane(
-      plane,
+      owningPlane,
       equationFromPointNormal(origin, sourcePlane.normal),
       origin,
       sourcePlane.xAxis,
     );
   }
   return buildWorkPlane(
-    plane,
+    owningPlane,
     equationFromPointNormal(origin, sourcePlane.xAxis),
     origin,
   );
@@ -1449,41 +1459,64 @@ function radiansToDegrees(radians: number): number {
   return (radians * 180) / Math.PI;
 }
 
+/**
+ * The working copy canonicalization mutates.
+ *
+ * <p>Owned callers get a *structural* copy: every record container is copied,
+ * so records can be added, replaced or removed freely, while the record objects
+ * themselves are shared with the input. Canonicalization never writes into a
+ * record - it replaces it - so sharing is safe, and the two places that used to
+ * write in place now own what they write.
+ *
+ * <p>This is what lets the identity caches in `schema.ts`, `complexity.ts` and
+ * `invariants.ts` actually hit. A JSON round trip made every point, entity and
+ * plane a new object on every edit, so those caches missed on everything except
+ * mesh arrays and each edit re-validated a whole scene that had not changed. It
+ * also retires the strip-clone-reattach dance that used to preserve meshes:
+ * sharing an entity keeps its mesh for free.
+ *
+ * <p>Untrusted input still takes the JSON round trip, where the copy is not an
+ * optimisation but a boundary - it is what stops a caller keeping a handle into
+ * the instrument's state.
+ */
 function cloneSnapshot(snapshot: GeometryLabSnapshot, reuseSurfaceMeshCaches: boolean): GeometryLabSnapshot {
   if (!reuseSurfaceMeshCaches) return JSON.parse(JSON.stringify(snapshot)) as GeometryLabSnapshot;
 
-  const preserved = new Map<string, { vertices: Vector3[]; faces: number[][] }>();
-  const preservedCurves = new Map<string, Vector3[]>();
-  const entities = Object.fromEntries(Object.entries(snapshot.scene.scene3d.entities).map(([id, entity]) => {
-    if (entity.kind === 'surface3d') {
-      preserved.set(id, { vertices: entity.vertices, faces: entity.faces });
-      return [id, { ...entity, vertices: [], faces: [] }];
-    }
-    if (entity.kind === 'curve3d') {
-      preservedCurves.set(id, entity.points);
-      return [id, { ...entity, points: [] }];
-    }
-    return [id, entity];
-  })) as GeometryLabSnapshot['scene']['scene3d']['entities'];
-  const withoutMeshes: GeometryLabSnapshot = {
+  const scene2d = snapshot.scene.scene2d;
+  const scene3d = snapshot.scene.scene3d;
+
+  const appState: GeometryLabSnapshot['appState'] = {
+    ...snapshot.appState,
+    view2d: { ...snapshot.appState.view2d },
+    view3d: { ...snapshot.appState.view3d },
+  };
+  // Selections are rewritten in place when a legacy edge id is migrated.
+  if (snapshot.appState.selected) {
+    appState.selected = snapshot.appState.selected.map(selection => ({ ...selection }));
+  }
+
+  return {
     ...snapshot,
+    appState,
     scene: {
       ...snapshot.scene,
-      scene3d: { ...snapshot.scene.scene3d, entities },
+      links: snapshot.scene.links.map(link => ({ ...link })),
+      scene2d: {
+        ...scene2d,
+        points: { ...scene2d.points },
+        entities: { ...scene2d.entities },
+        ...(scene2d.constraints ? { constraints: { ...scene2d.constraints } } : {}),
+      },
+      scene3d: {
+        ...scene3d,
+        points: { ...scene3d.points },
+        entities: { ...scene3d.entities },
+        workPlanes: { ...scene3d.workPlanes },
+        measurements: { ...scene3d.measurements },
+        nets: { ...scene3d.nets },
+      },
     },
   };
-  const next = JSON.parse(JSON.stringify(withoutMeshes)) as GeometryLabSnapshot;
-  for (const [id, mesh] of preserved) {
-    const entity = next.scene.scene3d.entities[id];
-    if (entity?.kind !== 'surface3d') continue;
-    entity.vertices = mesh.vertices;
-    entity.faces = mesh.faces;
-  }
-  for (const [id, points] of preservedCurves) {
-    const entity = next.scene.scene3d.entities[id];
-    if (entity?.kind === 'curve3d') entity.points = points;
-  }
-  return next;
 }
 
 function fail(code: GeometryLabCanonicalizationErrorCode, objectId: string, message: string): never {

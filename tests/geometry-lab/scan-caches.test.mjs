@@ -224,9 +224,12 @@ test('the same face array against a shorter vertex array is re-checked', () => {
   assert.deepEqual(getGeometryLabInvariantIssues(ok), [], 'and the sound mesh is still sound');
 });
 
-test('mesh checks survive an edit that rebuilds the surface object', () => {
-  // Canonicalization rebuilds every entity object per delta while reattaching
-  // the same mesh arrays, which is exactly why these caches key on the arrays.
+test('mesh checks survive an edit, and the mesh is not rebuilt', () => {
+  // When these caches were written, canonicalization rebuilt every entity
+  // object on every delta while reattaching the same mesh arrays - which is why
+  // they key on the arrays rather than the entity. Canonicalization now shares
+  // record objects too, so both survive; keying on the arrays remains correct
+  // and is what kept this working through that change.
   const lab = createGeometryLab();
   lab.addSurfaceZ({
     xRange: [-5, 5], yRange: [-5, 5], xSamples: 24, ySamples: 24,
@@ -241,8 +244,8 @@ test('mesh checks survive an edit that rebuilds the surface object', () => {
   lab.applyDelta({ op: 'updatePoint', id, changes: { x: 5 } });
 
   const second = lab.peekSnapshot().scene.scene3d.entities;
-  assert.notEqual(second[surfaceKey], first[surfaceKey], 'the entity object is rebuilt');
-  assert.equal(second[surfaceKey].vertices, verticesBefore, 'the mesh array is reattached, not rebuilt');
+  assert.equal(second[surfaceKey].vertices, verticesBefore, 'the mesh array is never rebuilt');
+  assert.equal(second[surfaceKey], first[surfaceKey], 'and an untouched entity is now shared outright');
   assert.deepEqual(getGeometryLabInvariantIssues(lab.peekSnapshot()), []);
 });
 

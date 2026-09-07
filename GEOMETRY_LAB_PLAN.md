@@ -12,7 +12,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
-| 0 - Performance foundation | 9 | 11 | All landed except 0.3 (declined on measurement) and 0.7 (blocked by the JSON contract) |
+| 0 - Performance foundation | 10 | 12 | **Complete.** 0.3 and 0.7 closed on evidence as not worth doing; 0.12 added and landed |
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
 | 2 - Close the 2D gap | 1 | 5 | 2.2 landed on shared builders; 2.1 half done; 2.3-2.5 open |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
@@ -331,10 +331,15 @@ feature. Nothing here is user-visible.
 
   It could only pay if the graph were maintained incrementally across deltas
   rather than rebuilt per scene, and even then the ceiling is the full
-  recompute's 0.28-0.85 ms out of a ~4.8 ms drag, so 6-16%. Task 0.9 is worth
-  more than that and carries less risk, since a stale dependency graph produces
-  wrong geometry silently. **Revisit only after 0.9, and only with incremental
-  graph maintenance.**
+  recompute's 0.28-0.85 ms out of a drag, so a small share of it.
+
+  **Re-measured after 0.9, 0.10, 0.11 and 0.12, and closed.** The per-delta
+  overhead those tasks removed was large enough that scoping might have started
+  to pay; it does not. Scoped is still 1.37x-2.10x slower at every size tested,
+  because the cost is intrinsic: building the reverse index calls
+  `geometryObjectDependencies` for every object and allocates per object, while
+  the full walk's per-object cost for the common case is a property read and an
+  early return. **Not doing this.**
 
   This also corrects finding P1: the full-scene recompute is not what makes a
   drag scale with scene size. At 500 objects it is 0.12 ms of a 4.8 ms drag.
@@ -381,6 +386,34 @@ feature. Nothing here is user-visible.
   0.51 ms on a 500-point scene and **11.86 ms and 6.6 MB on a four-surface
   scene** - a cost every host redrawing from state was paying per frame, for
   isolation it never used.
+- [x] **0.12 Canonicalization shares records instead of deep-copying them.**
+  *Found while closing the phase.* Canonicalization built its working copy with
+  `JSON.parse(JSON.stringify(...))`, so every point, entity and plane was a new
+  object on every edit. That defeated the identity caches from tasks 0.10 and
+  0.11 for everything except mesh arrays: each edit re-validated and re-scanned
+  an entire scene that had not changed.
+
+  Owned callers now get a *structural* copy - record containers copied, record
+  objects shared. Canonicalization never writes into a record, it replaces one,
+  so sharing is safe; the two places that did write in place (a work plane's
+  resolved `through` origin, and legacy edge-id migration on selections) now own
+  what they write. The strip-clone-reattach dance that preserved meshes is gone
+  too: sharing an entity keeps its mesh for free. Untrusted input still takes
+  the JSON round trip, where the copy is a boundary rather than an optimisation.
+
+  | Case | Before | After |
+  | --- | --: | --: |
+  | `drag-chain-500` | 3.64 ms | **2.44 ms** |
+  | `drag-fanout-400` | 5.50 ms | 4.70 ms |
+  | `drag-mesh-4-surfaces` | 0.78 ms | **0.39 ms** |
+  | `delta-roundtrip-500` | 3.56 ms | 2.33 ms |
+  | `snapshot-read-500` | 0.49 ms | 0.39 ms |
+
+  Verified against all three differential corpora - 169 graph/invariant/cascade
+  records, 29 schema validations, 58 complexity scans - identical in each, plus
+  tests that a held snapshot is untouched by later edits and that undo still
+  restores exactly.
+
 - [ ] **0.7 Packed mesh storage.** Move `SurfaceEntity3D.vertices`,
   `CurveEntity3D.points` and solid mesh points to `Float64Array` behind an
   accessor, with JSON serialization unchanged so persisted snapshots keep their
@@ -424,7 +457,13 @@ feature. Nothing here is user-visible.
   Doing it properly means a typed-array-aware clone, a serializer pair at the
   JSON boundary, validators taught both representations, and a migration - a
   change to the persistence and collaboration contracts, not an optimisation.
-  **Recommend splitting it** and doing task 0.10 first, which is worth more.
+
+  **Closed as not worth it, on evidence.** The reason to want packed meshes was
+  per-edit cost, and tasks 0.10, 0.11 and 0.12 removed that by other means:
+  `drag-mesh-4-surfaces` went 28.7 ms → **0.39 ms** without touching the storage
+  format. What remains is resident scene size - roughly 5 MB against 1.4 MB for
+  four surfaces - which no measured budget is missing. Reopen it if resident
+  memory ever becomes the constraint; do not reopen it for speed.
 
 - [x] **0.10 Stop rescanning meshes on every edit.** Two caches, both keyed by
   object identity, both remembering only *clean* results so every failure is
