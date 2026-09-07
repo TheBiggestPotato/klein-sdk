@@ -221,6 +221,27 @@ export function buildDynamicPlaneScene(dependentCount) {
   return { lab, dragId: corners[2] };
 }
 
+/**
+ * Solids sliced by one shared, movable plane.
+ *
+ * <p>Each section is recut from its solid on every commit, and its owned vertex
+ * points are repositioned with it. The plan expected these meshes to be baked
+ * and to need lazy regeneration; they are not, and this case is what says so.
+ */
+export function buildSlicedSolidsScene(sectionCount) {
+  const lab = createGeometryLab();
+  const corners = [
+    lab.addPoint3D({ x: 0, y: 0, z: 0 }),
+    lab.addPoint3D({ x: 1, y: 0, z: 0 }),
+    lab.addPoint3D({ x: 0, y: 1, z: 0 }),
+  ];
+  const plane = lab.addWorkPlaneByThreePoints(corners);
+  for (let index = 0; index < sectionCount; index += 1) {
+    lab.addCrossSection(lab.addPolyhedron('cube', { x: index * 8, y: 0, z: 0 }, 4), plane);
+  }
+  return { lab, corners };
+}
+
 /** A 2D figure sized for the invariant reporter, whose own cap is 24 points. */
 export function buildInvariantScene(pointCount) {
   const lab = createGeometryLab();
@@ -415,6 +436,25 @@ export const CASES = [
     run() {
       const { lab, dragId } = buildDynamicPlaneScene(10);
       return (index) => lab.applyDelta({ op: 'updatePoint', id: dragId, changes: { z: (index % 20) * 0.05 } });
+    },
+  },
+  {
+    id: 'drag-plane-3-cross-sections',
+    title: 'Drag a plane slicing three solids, recutting each section',
+    findings: [],
+    budgetMs: 4,
+    run() {
+      const { lab, corners } = buildSlicedSolidsScene(3);
+      // All three corners together, so the plane translates rather than tilting:
+      // a tilt steep enough to miss the furthest solid would empty that section,
+      // and an empty section is a rejected edit rather than a slow one.
+      return (index) => {
+        const z = ((index % 20) - 10) * 0.05;
+        lab.applyDelta({
+          op: 'batch',
+          deltas: corners.map(id => ({ op: 'updatePoint', id, changes: { z } })),
+        });
+      };
     },
   },
   {

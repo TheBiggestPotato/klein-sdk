@@ -800,26 +800,100 @@ function canonicalCrossSection(scene: GeometryScene3D, section: CrossSectionEnti
   if (vertices.length < 3) {
     fail('unrecomputable_cross_section', section.id, `Cross-section "${section.id}" is empty or degenerate.`);
   }
-  if (new Set(section.pointIds).size !== section.pointIds.length || section.pointIds.length !== vertices.length) {
+  if (new Set(section.pointIds).size !== section.pointIds.length) {
     fail(
       'cross_section_topology_changed',
       section.id,
-      `Cross-section "${section.id}" changed from ${section.pointIds.length} to ${vertices.length} vertices.`,
+      `Cross-section "${section.id}" has duplicate vertex point ids.`,
     );
   }
-  const priorPoints = section.pointIds.map(pointId => requirePoint(scene, pointId, section.id, 'cross-section'));
-  const identityAlignedVertices = alignCrossSectionVertices(priorPoints, vertices, section.id);
-  section.pointIds.forEach((pointId, index) => {
+
+  // A section's shape changes as its plane travels through the solid - a cube
+  // sliced near a corner gives a triangle, through the middle a hexagon - and
+  // sliding the plane to watch exactly that is the point of the tool. This used
+  // to fail the edit whenever the vertex count changed, because each vertex
+  // carries a persistent point identity and there was no rule for matching N
+  // old identities to M new ones. The rule is now: keep the identities that
+  // still have a vertex, name any new ones deterministically from the section,
+  // and drop the surplus.
+  const topologyChanged = section.pointIds.length !== vertices.length;
+  const pointIds = reconcileCrossSectionPointIds(scene, section, vertices.length);
+
+  // Alignment rotates and reflects the recomputed loop to match the identities
+  // already on it, so a vertex keeps its point while the section merely moves.
+  // That only means something when the loop still has the same number of
+  // corners; when the count changes there is no correspondence left to
+  // preserve, and the freshly created points have no position to match on
+  // anyway.
+  const identityAlignedVertices = topologyChanged
+    ? vertices
+    : alignCrossSectionVertices(
+      pointIds.map(pointId => requirePoint(scene, pointId, section.id, 'cross-section')),
+      vertices,
+      section.id,
+    );
+  pointIds.forEach((pointId, index) => {
     const point = requirePoint(scene, pointId, section.id, 'cross-section');
     const vertex = identityAlignedVertices[index] as Vector3;
     scene.points[pointId] = { ...point, x: vertex.x, y: vertex.y, z: vertex.z };
   });
   return {
     ...section,
+    pointIds,
     vertices: identityAlignedVertices,
     area: polygonArea3D(identityAlignedVertices),
     perimeter: polygonPerimeter3D(identityAlignedVertices),
   };
+}
+
+/**
+ * Makes a section own exactly one point per vertex, adding and removing as its
+ * shape changes.
+ *
+ * <p>Ids for added vertices are derived from the section's own id and the
+ * vertex index rather than drawn from the instrument's id generator, because
+ * canonicalization has to be a pure function of the snapshot: two peers
+ * replaying the same delta must produce the same ids, and a random one would
+ * diverge them.
+ *
+ * <p>Surplus points are deleted outright. If something else still refers to one
+ * - a measurement, say - the invariant check that runs after canonicalization
+ * reports the dangling reference and the edit is rejected, which is the right
+ * outcome: a vertex that another object depends on should not vanish silently.
+ */
+function reconcileCrossSectionPointIds(
+  scene: GeometryScene3D,
+  section: CrossSectionEntity,
+  vertexCount: number,
+): string[] {
+  const kept = section.pointIds.slice(0, vertexCount);
+  for (const surplusId of section.pointIds.slice(vertexCount)) {
+    delete scene.points[surplusId];
+  }
+
+  const next = [...kept];
+  for (let index = kept.length; index < vertexCount; index += 1) {
+    let id = `${section.id}~v${index}`;
+    // A section that grew, shrank and grew again can find its deterministic
+    // name already taken by an unrelated record; walk to the first free one so
+    // the result stays deterministic without ever colliding.
+    let suffix = 0;
+    while (scene.points[id] !== undefined || next.includes(id)) {
+      suffix += 1;
+      id = `${section.id}~v${index}_${suffix}`;
+    }
+    scene.points[id] = {
+      id,
+      kind: 'point3d',
+      x: 0,
+      y: 0,
+      z: 0,
+      hidden: true,
+      locked: true,
+    };
+    next.push(id);
+  }
+  return next;
 }
 
 /**

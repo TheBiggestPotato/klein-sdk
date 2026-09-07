@@ -13,7 +13,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
 | 0 - Performance foundation | 9 | 11 | All landed except 0.3 (declined on measurement) and 0.7 (blocked by the JSON contract) |
-| 1 - Make 3D dynamic | 4 | 6 | Intersections are live; 1.4 meshes and 1.5 cascade open |
+| 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
 | 2 - Close the 2D gap | 0 | 5 | |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
 | 4 - The learning layer | 0 | 6 | 4.1 can start any time |
@@ -49,12 +49,15 @@ point and stored it as a free `GeometryPoint3D`; move the plane and the
 "intersection" stayed where it was. Not a missing feature - a figure that
 silently becomes false, which in a teaching tool is worse than an error.
 
-**Half fixed by tasks 1.1-1.2.** Line-plane and plane-plane intersections now
-follow their sources, and a construction whose sources move into a degenerate
-arrangement fails the edit rather than leaving a stale position. Cross sections,
-solid vertices and nets are still baked - tasks 1.4 and 1.5. One thing the
-original wording got wrong: 3D midpoints always did recompute, so the gap was
-narrower than stated, though no less real for the objects it covered.
+**Fixed by Phase 1.** Line-plane and plane-plane intersections follow their
+sources; a construction whose sources move into a degenerate arrangement fails
+the edit rather than leaving a stale position; and cross-sections may now change
+shape as their plane travels through a solid instead of rejecting the edit.
+
+Two things the original wording got wrong, both found by measuring rather than
+reading. 3D midpoints always did recompute, so the gap was narrower than stated.
+And cross-sections were never baked either - they recut on every commit, and
+what blocked them was an identity rule, not staleness.
 
 **The Lab has no 2D API.** The `GeometryLab` interface (`types.ts:340`) exposes
 roughly forty-five methods and every one is 3D, while `GeometryLabTool` declares
@@ -596,16 +599,45 @@ of derived objects on the recompute path.
   persisted snapshot contains, so old scenes load and behave identically. Tested
   directly. Relinking an old baked figure to its sources stays a client-side
   offer if it is ever wanted; nothing in the format forces it.
-- [ ] **1.4 Lazy mesh regeneration.** Cross-sections and solids keep baked
-  meshes, but store their generator parameters and a dirty flag; regenerate on
-  read, not on every delta. A dragged plane with three dependent cross-sections
-  must stay inside the drag budget, which means the regeneration cannot be
-  synchronous per frame for large meshes - debounce to the frame boundary and
-  render the previous mesh until the new one is ready.
-- [ ] **1.5 Cascade correctness.** `planGeometryLabCascadeDeletion`
-  (`dependencies.ts:268`) already models delete policies; extend it to the new
-  construction edges so deleting a plane does the right thing to everything
-  derived from it.
+- [x] **1.4 Cross-sections may change shape.** *The task's premise was wrong
+  twice, and the real defect was elsewhere.*
+
+  It assumed section meshes are baked and need lazy regeneration behind a dirty
+  flag. They are not baked - `canonicalizeCrossSections` recuts every section
+  from its solid and plane on every commit - and the cost is not a problem:
+  `drag-plane-3-cross-sections` measures **1.48 ms** against the 4 ms budget.
+  Debouncing would have added a frame of staleness and a dirty-flag protocol to
+  fix something that was never slow.
+
+  What actually failed was topology. Each vertex carries a persistent point
+  identity, and there was no rule for matching four old identities onto six new
+  ones, so any edit that changed the section's shape was **rejected** as
+  `cross_section_topology_changed`. That is precisely the classroom activity -
+  slide the plane through a cube and watch the square become a hexagon - and it
+  was the one thing the model forbade.
+
+  The rule now: keep the identities that still have a vertex, name new ones
+  deterministically from the section id, drop the surplus. Deterministic because
+  canonicalization must be a pure function of the snapshot - collaborating peers
+  replay the same delta and have to agree on the ids. Loop alignment, which
+  rotates and reflects the recut loop to match existing identities, still runs
+  when the count is unchanged and is skipped when it changes, since there is no
+  correspondence left to preserve. A section slid clear of its solid is still
+  rejected: a section with nothing to cut is not a section.
+
+      flat cut          4 vertices, area 16
+      tilted            4 vertices, area 22.6
+      on the diagonal   6 vertices, area 20.8
+      flat again        4 vertices, area 16
+- [x] **1.5 Cascade correctness.** No new code was needed: cascade reads
+  `geometryConstructionSourceIds`, which task 1.1 extended, so the new edges
+  were carried the moment the construction kinds existed. Verified rather than
+  assumed - deleting a plane removes the sections it cuts and the intersections
+  on it while leaving the solid; deleting a source line removes the point
+  derived from it; deleting either plane of a plane-plane intersection removes
+  the line and both endpoints; deleting a source point cascades through the
+  plane to the section; and a section deleted after it grew takes the vertex
+  points it acquired with it.
 - [x] **1.6 Perf gate.** `drag-plane-10-dependents` drags a plane carrying ten
   line-plane intersections, each of which must be recomputed in dependency order
   inside the commit: **0.41 ms** against the 4 ms budget. The case only became
