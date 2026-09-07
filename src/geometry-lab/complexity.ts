@@ -108,8 +108,20 @@ export const DEFAULT_GEOMETRY_LAB_COMPLEXITY_LIMITS: Readonly<GeometryLabComplex
   maxExportVertexReferences: 500_000,
   maxExportBytes: 16 * MEBIBYTE,
   maxHistoryEntries: 100,
-  maxHistoryBytes: 32 * MEBIBYTE,
-  maxHistoryEntryBytes: 16 * MEBIBYTE,
+  // Sized against what the instrument can actually produce rather than against
+  // a round number. The largest single history entry reachable is a sampled
+  // surface at the per-axis cap - 128x128, about 1.5 MB of JSON - so 4 MiB
+  // keeps every reachable edit undoable with room to spare, where the previous
+  // 16 MiB was ten times beyond anything the instrument could emit.
+  //
+  // The total is the memory that actually matters: 8 MiB holds roughly 19,000
+  // ordinary edits (100 drag steps on a 61-point scene measure 42 KB in total)
+  // or five surface additions at the per-entry ceiling. Mesh-heavy sessions
+  // therefore keep a shallower undo stack than they did at 32 MiB, which is the
+  // deliberate trade - undo depth degrades under memory pressure instead of the
+  // instrument holding 32 MiB of history it will almost never use.
+  maxHistoryBytes: 8 * MEBIBYTE,
+  maxHistoryEntryBytes: 4 * MEBIBYTE,
 });
 
 export type GeometryLabComplexityIssueCode =

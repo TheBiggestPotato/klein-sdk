@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "calibrationMs": 53.1046,
+  "calibrationMs": 48.3602,
   "gcAvailable": true,
   "samples": 25,
   "cases": {
@@ -13,10 +13,10 @@
         "P4"
       ],
       "budgetMs": 4,
-      "medianMs": 3.5556,
-      "normalizedTime": 0.06696,
-      "retainedHeapBytes": 212624,
-      "churnHeapBytes": 5472784,
+      "medianMs": 3.3686,
+      "normalizedTime": 0.06966,
+      "retainedHeapBytes": 211936,
+      "churnHeapBytes": 13327360,
       "withinBudget": true
     },
     "drag-fanout-400": {
@@ -26,10 +26,10 @@
         "P3"
       ],
       "budgetMs": 4,
-      "medianMs": 5.2743,
-      "normalizedTime": 0.09932,
-      "retainedHeapBytes": 9592416,
-      "churnHeapBytes": 41351128,
+      "medianMs": 5.0164,
+      "normalizedTime": 0.10373,
+      "retainedHeapBytes": 9592488,
+      "churnHeapBytes": 25711008,
       "withinBudget": false
     },
     "delta-roundtrip-500": {
@@ -38,10 +38,10 @@
         "P5"
       ],
       "budgetMs": 0.5,
-      "medianMs": 3.295,
-      "normalizedTime": 0.06205,
+      "medianMs": 3.1789,
+      "normalizedTime": 0.06573,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 34030048,
+      "churnHeapBytes": 31057888,
       "withinBudget": false
     },
     "snapshot-read-500": {
@@ -50,20 +50,20 @@
         "P6"
       ],
       "budgetMs": 0.5,
-      "medianMs": 0.5244,
-      "normalizedTime": 0.00988,
+      "medianMs": 0.4766,
+      "normalizedTime": 0.00985,
       "retainedHeapBytes": 1448,
       "churnHeapBytes": 9597752,
-      "withinBudget": false
+      "withinBudget": true
     },
     "export-svg-500": {
       "title": "SVG render of a 500-point 3D scene",
       "findings": [],
       "budgetMs": 16,
-      "medianMs": 1.938,
-      "normalizedTime": 0.03649,
+      "medianMs": 1.8797,
+      "normalizedTime": 0.03887,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 29754976,
+      "churnHeapBytes": 29754992,
       "withinBudget": true
     },
     "invariants-24": {
@@ -72,10 +72,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 0.283,
-      "normalizedTime": 0.00533,
-      "retainedHeapBytes": 54992,
-      "churnHeapBytes": 8232872,
+      "medianMs": 0.245,
+      "normalizedTime": 0.00507,
+      "retainedHeapBytes": 53696,
+      "churnHeapBytes": 10257128,
       "withinBudget": true
     }
   },
@@ -90,10 +90,10 @@
         100,
         400
       ],
-      "smallMs": 0.7393,
-      "largeMs": 2.4998,
-      "timeExponent": 0.879,
-      "heapExponent": -0.286,
+      "smallMs": 0.7016,
+      "largeMs": 2.407,
+      "timeExponent": 0.889,
+      "heapExponent": -0.305,
       "meetsTarget": false
     },
     "scale-drag-fanout": {
@@ -107,9 +107,9 @@
         100,
         400
       ],
-      "smallMs": 1.2527,
-      "largeMs": 5.019,
-      "timeExponent": 1.001,
+      "smallMs": 1.2248,
+      "largeMs": 4.8616,
+      "timeExponent": 0.994,
       "heapExponent": 0.987,
       "meetsTarget": true
     },
@@ -123,9 +123,9 @@
         100,
         400
       ],
-      "smallMs": 0.0681,
-      "largeMs": 0.4157,
-      "timeExponent": 1.305,
+      "smallMs": 0.0629,
+      "largeMs": 0.3963,
+      "timeExponent": 1.327,
       "heapExponent": null,
       "meetsTarget": false
     }

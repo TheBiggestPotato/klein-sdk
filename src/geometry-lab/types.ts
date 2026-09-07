@@ -349,6 +349,8 @@ export interface ParametricCurve3DInput {
 
 export interface GeometryLab extends KleinInstrument<GeometryLabSnapshot, GeometryLabDelta, GeometryLabTool> {
   readonly actorId: string;
+  /** The snapshot without copying it, for callers that only read. See the implementation note. */
+  peekSnapshot(): Readonly<GeometryLabSnapshot>;
   importJson(input: string | JsonValue, options?: LoadOptions): void;
   addPoint3D(point: Vector3 & GeometryLabStyleOptions): string;
   addSegment3D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;

@@ -486,8 +486,34 @@ class GeometryLabInstrument implements GeometryLab {
     this.#root = undefined;
   }
 
+  /**
+   * An isolated, mutable copy of the current snapshot. Writing into what this
+   * returns never affects the instrument, and that is a tested guarantee.
+   */
   getSnapshot(): GeometryLabSnapshot {
     return cloneSnapshot(this.#snapshot);
+  }
+
+  /**
+   * The current snapshot without copying it, for callers that only read.
+   *
+   * <p>{@link getSnapshot} deep-clones through
+   * `JSON.parse(JSON.stringify(...))`: 0.5 ms on a 500-point scene, and 11.7 ms
+   * and 6.7 MB on one holding four sampled surfaces. A host redrawing from
+   * state pays that per frame, for isolation it does not use.
+   *
+   * <p>Sharing is safe on this side - the reducer is copy-on-write and the
+   * instrument only ever replaces the whole snapshot, never writes into one -
+   * so the only hazard is a caller writing into what it receives. The
+   * containers are frozen so that fails loudly rather than silently corrupting
+   * instrument state: adding, replacing or deleting a record throws. Writing
+   * into an individual point or entity is *not* caught, because deep-freezing
+   * the surface scene above costs 30 ms, which would defeat the purpose.
+   *
+   * <p>So: read from this, and if you need to write, use {@link getSnapshot}.
+   */
+  peekSnapshot(): Readonly<GeometryLabSnapshot> {
+    return freezeGeometryLabSnapshotShell(this.#snapshot);
   }
 
   subscribeDelta(listener: (delta: GeometryLabDelta, meta: DeltaMeta) => void): () => void {
@@ -2048,6 +2074,45 @@ function radiansToDegrees(radians: number): number {
 
 function cloneSnapshot(snapshot: GeometryLabSnapshot): GeometryLabSnapshot {
   return JSON.parse(JSON.stringify(snapshot)) as GeometryLabSnapshot;
+}
+
+/**
+ * Snapshots whose shell has already been frozen, so repeated reads of the same
+ * version cost nothing. Keyed by the snapshot object: a new version is a new
+ * key, and there is nothing to invalidate.
+ */
+const frozenGeometryLabShells = new WeakSet<GeometryLabSnapshot>();
+
+/**
+ * Freezes the snapshot's containers - the snapshot, its scenes, its app state
+ * and the eight record maps - and nothing below them.
+ *
+ * <p>Bounded work regardless of scene size, which is the whole point: the
+ * records inside can hold tens of thousands of mesh vertices, and walking them
+ * would cost more than the deep copy this replaces.
+ */
+function freezeGeometryLabSnapshotShell(snapshot: GeometryLabSnapshot): GeometryLabSnapshot {
+  if (frozenGeometryLabShells.has(snapshot)) return snapshot;
+
+  const scene2d = snapshot.scene.scene2d;
+  const scene3d = snapshot.scene.scene3d;
+  Object.freeze(scene2d.points);
+  Object.freeze(scene2d.entities);
+  if (scene2d.constraints) Object.freeze(scene2d.constraints);
+  Object.freeze(scene3d.points);
+  Object.freeze(scene3d.entities);
+  Object.freeze(scene3d.workPlanes);
+  Object.freeze(scene3d.measurements);
+  Object.freeze(scene3d.nets);
+  Object.freeze(scene2d);
+  Object.freeze(scene3d);
+  Object.freeze(snapshot.scene.links);
+  Object.freeze(snapshot.scene);
+  Object.freeze(snapshot.appState);
+  Object.freeze(snapshot);
+
+  frozenGeometryLabShells.add(snapshot);
+  return snapshot;
 }
 
 function geometryLabSdkError(error: unknown, fallbackCode: string): KleinSdkError {

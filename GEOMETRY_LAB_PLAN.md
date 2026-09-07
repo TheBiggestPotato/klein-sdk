@@ -12,7 +12,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
-| 0 - Performance foundation | 5 | 9 | 0.1, 0.2, 0.4, 0.5, 0.9 landed; 0.3 measured and declined; 0.6-0.8 open |
+| 0 - Performance foundation | 7 | 10 | 0.1, 0.2, 0.4, 0.5, 0.6, 0.8, 0.9 landed; 0.3 declined on measurement; 0.7 blocked, split into 0.10 |
 | 1 - Make 3D dynamic | 0 | 6 | Blocked on 0.2-0.4 |
 | 2 - Close the 2D gap | 0 | 5 | |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
@@ -129,14 +129,25 @@ ones.
 
 ### P6. Deep clone on every snapshot read
 
-`getSnapshot()` (`instrument.ts:489`) deep-clones the whole snapshot. Any host
-reading state per frame pays a full copy per frame.
+`getSnapshot()` deep-clones the whole snapshot - 0.51 ms on a 500-point scene,
+11.86 ms and 6.6 MB on a four-surface one. Any host reading state per frame paid
+a full copy per frame.
+
+**Addressed by task 0.6** with `peekSnapshot()`. `getSnapshot()` keeps its
+tested isolation contract, so the fast path is opt-in rather than a swap.
 
 ### P7. History entries sized for the worst case
 
 `maxHistoryEntries: 100`, `maxHistoryEntryBytes: 16 MiB`,
 `maxHistoryBytes: 32 MiB` (`complexity.ts:67`). A single entry may be 16 MiB,
 and entries are serialized JSON patches.
+
+### P11. Per-edit cost scales with mesh size
+
+Moving one unrelated point in a four-surface scene costs 28.7 ms, 62% of it the
+generic untrusted-input JSON walk inside the complexity assertion. This is the
+finding P8 was reaching for, and it is much larger than the storage format.
+**Task 0.10.**
 
 ### P8. Mesh geometry stored as object arrays
 
@@ -339,17 +350,91 @@ feature. Nothing here is user-visible.
   profile. Profiling the path shows the assertion was never the bulk of it -
   see [Section 2b](#2b-per-delta-profile). It is a real 17%, not a
   transformation, and the delta path is still 9x over budget.
-- [ ] **0.6 Structural-sharing reads.** The reducer is already copy-on-write, so
-  `getSnapshot()` can return a frozen reference instead of a deep clone (P6).
-  Keep the cloning variant available as `getSnapshotCopy()` for hosts that
-  mutate what they receive.
+- [x] **0.6 Structural-sharing reads.** Added `peekSnapshot()`, which returns the
+  instrument's own snapshot instead of copying it (P6). Its containers are
+  frozen, so a caller writing into one throws rather than silently corrupting
+  instrument state; freezing is shallow because deep-freezing a four-surface
+  scene costs 30 ms, which would defeat the point.
+
+  **Done additively, not as the swap the task described.** The task was to
+  change `getSnapshot()` itself. That turned out to break a deliberately tested
+  contract - `phase3-boundaries` asserts that what `getSnapshot` returns can be
+  written into freely without affecting the instrument - and six tests failed.
+  The contract is worth keeping, so `getSnapshot()` is unchanged and the fast
+  path is opt-in.
+
+  **Result:** `peekSnapshot()` is effectively free where `getSnapshot()` is
+  0.51 ms on a 500-point scene and **11.86 ms and 6.6 MB on a four-surface
+  scene** - a cost every host redrawing from state was paying per frame, for
+  isolation it never used.
 - [ ] **0.7 Packed mesh storage.** Move `SurfaceEntity3D.vertices`,
   `CurveEntity3D.points` and solid mesh points to `Float64Array` behind an
   accessor, with JSON serialization unchanged so persisted snapshots keep their
   current shape (P8). Do this before Phase 1.4 adds mesh regeneration.
-- [ ] **0.8 History budget.** Lower `maxHistoryEntryBytes` and `maxHistoryBytes`
-  toward the Section 3 targets, and store patches structurally rather than as
-  serialized JSON where the diff is small (P7).
+- [x] **0.8 History budget.** `maxHistoryEntryBytes` 16 MiB → 4 MiB,
+  `maxHistoryBytes` 32 MiB → 8 MiB (P7), sized against measurement rather than
+  round numbers: the largest single entry the instrument can produce is a
+  sampled surface at the per-axis cap, **1.51 MB**, so the old per-entry cap was
+  ten times beyond anything reachable and 4 MiB keeps every reachable edit
+  undoable. 100 drag steps on a 61-point scene total 42 KB, so 8 MiB holds
+  roughly 19,000 ordinary edits. The trade is explicit: mesh-heavy sessions keep
+  a shallower undo stack than at 32 MiB.
+
+  The "store patches structurally" half was already true - `changes` are
+  structured objects, and only the size accounting serialized.
+
+  **A failed optimisation, recorded because the number is counter-intuitive.**
+  `new TextEncoder().encode(json).byteLength` allocates a full 1.5 MB buffer to
+  read a length, so counting bytes in a loop looked free. It is **17x slower**
+  (2.41 ms against 0.14 ms): the native encoder beats a per-character JavaScript
+  loop over 1.5 million characters by far more than the allocation costs. The
+  loop was reverted. Hoisting the encoder to module scope was the part worth
+  keeping, and is a real 10% on entry creation.
+
+- [ ] **0.7 Packed mesh storage.** *Blocked as written - needs re-scoping.*
+  `SurfaceEntity3D.vertices` as `Vector3[]` costs 56 B/vertex against 24 for a
+  packed `Float64Array`, and `faces: number[][]` costs 88 B/face against 16 for
+  a `Uint32Array`. The win is real, but "behind an accessor, with JSON
+  serialization unchanged" is not achievable locally, because the snapshot's
+  JSON-serializability is load-bearing in five places:
+
+  - Five internal deep clones use `JSON.parse(JSON.stringify(...))`
+    (`canonicalize.ts` x2, `history.ts`, `reducer.ts` x2). A typed array comes
+    back as `{"0":1,"1":2,…}`, silently corrupting the mesh.
+  - `Array.isArray` gates in `schema.ts` and `complexity.ts` are false for typed
+    arrays.
+  - JSON export, persisted files and collaboration deltas all carry the current
+    `[{x,y,z},…]` shape, so changing it is a format migration for every saved
+    scene and every peer.
+
+  Doing it properly means a typed-array-aware clone, a serializer pair at the
+  JSON boundary, validators taught both representations, and a migration - a
+  change to the persistence and collaboration contracts, not an optimisation.
+  **Recommend splitting it** and doing task 0.10 first, which is worth more.
+
+- [ ] **0.10 Stop rescanning meshes on every edit.** *Added from the 0.7
+  investigation, and larger than 0.7.* Moving one unrelated point in a
+  four-surface scene costs **28.7 ms**, and it is not storage:
+
+  | Stage | Cost |
+  | --- | --: |
+  | `assertGeometryLabSnapshotComplexity` | 17.9 ms |
+  | `validateGeometryLabSnapshotStrict` | 7.0 ms |
+  | `getGeometryLabInvariantIssues` | 3.2 ms |
+  | `canonicalize` (mesh caches reused) | 0.01 ms |
+
+  The complexity assertion alone is 4.6x the cost of serialising the entire
+  snapshot, because `preflightGeometryLabSnapshotComplexity` runs
+  `scanUnknownJson` - a generic untrusted-input walk over every vertex and face
+  - before the structural checks. That walk is exactly right for
+  `loadSnapshot` and `importJson`, where the input is untrusted. On the owned
+  path the content came from an already-scanned snapshot plus an already-scanned
+  delta, and the structural half (`inspectSnapshot`) is what actually enforces
+  the caps. Canonicalization already solves this shape with
+  `reuseSurfaceMeshCaches` and costs 0.01 ms, which is the model to follow.
+
+  Note this is a resource bound, not an integrity check: a missed bound means
+  memory growth, not corruption - so it carries less risk than task 0.9 did.
 - [x] **0.9 Cheaper integrity checking.** *Added after the task 0.5 profile, and
   solved differently from how it was scoped.*
 
