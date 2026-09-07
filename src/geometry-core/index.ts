@@ -831,112 +831,181 @@ export function recomputeGeometryDependents<T extends GeometryScene>(scene: T, c
   return recomputeGeometryObjects(scene, ids);
 }
 
+/**
+ * Working state for one recompute pass.
+ *
+ * <p>A recompute walk used to rebuild the scene once per object it moved:
+ * every writer returned `{ ...scene, points: { ...scene.points, [id]: next } }`,
+ * so moving k derived points in a scene of N copied N entries k times. On the
+ * shape that matters - many derived objects driven by one dragged source - that
+ * is quadratic, and it was the largest single cost on the drag path.
+ *
+ * <p>So the pass keeps one draft instead. It holds the original scene until the
+ * first actual write, at which point it takes a single shallow copy and mutates
+ * that from then on. Two properties fall out, and both are relied on elsewhere:
+ * a pass that changes nothing allocates nothing and returns the very same
+ * object it was given, so callers comparing by identity still see "unchanged";
+ * and a pass that changes anything costs one copy rather than k.
+ *
+ * <p>The draft is never exposed. It is created and consumed inside
+ * `recomputeGeometryObjects`, and the scene handed back out is not mutated
+ * again after that function returns, so callers keep the immutable snapshot
+ * semantics they had before.
+ */
+interface GeometryRecomputeDraft<T extends GeometryScene> {
+  scene: T;
+  changed: boolean;
+}
+
+/**
+ * Takes the pass's single copy, the first time something is actually written.
+ * Both records are copied together: a writer that touches a point and an entity
+ * in one step would otherwise copy at two different moments and leave the draft
+ * half-shared.
+ */
+function makeGeometryDraftWritable<T extends GeometryScene>(draft: GeometryRecomputeDraft<T>): void {
+  if (draft.changed) return;
+  draft.scene = {
+    ...draft.scene,
+    points: { ...draft.scene.points },
+    entities: { ...draft.scene.entities },
+  };
+  draft.changed = true;
+}
+
+function setGeometryDraftPoint<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  point: GeometryPoint,
+): void {
+  makeGeometryDraftWritable(draft);
+  draft.scene.points[point.id] = point;
+}
+
+function setGeometryDraftEntity<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: GeometryEntity,
+): void {
+  makeGeometryDraftWritable(draft);
+  draft.scene.entities[entity.id] = entity;
+}
+
 function recomputeGeometryObjects<T extends GeometryScene>(scene: T, objectIds: Iterable<string>): T {
-  let next: T = scene;
+  const draft: GeometryRecomputeDraft<T> = { scene, changed: false };
   const done = new Set<string>();
   const active = new Set<string>();
 
   const visit = (id: string): void => {
     if (done.has(id) || active.has(id)) return;
     active.add(id);
-    for (const dependencyId of geometryObjectDependencies(next, id)) {
+    // Dependencies are read from the draft's current scene, so an object still
+    // sees sources recomputed earlier in this same walk.
+    for (const dependencyId of geometryObjectDependencies(draft.scene, id)) {
       visit(dependencyId);
     }
     active.delete(id);
-    next = recomputeGeometryObject(next, id);
+    recomputeGeometryObject(draft, id);
     done.add(id);
   };
 
   for (const id of objectIds) visit(id);
-  return next;
+  return draft.scene;
 }
 
-function recomputeGeometryObject<T extends GeometryScene>(scene: T, objectId: string): T {
-  const point = scene.points[objectId];
-  if (point) return recomputeGeometryPoint(scene, point);
+function recomputeGeometryObject<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  objectId: string,
+): void {
+  const point = draft.scene.points[objectId];
+  if (point) {
+    recomputeGeometryPoint(draft, point);
+    return;
+  }
 
-  const entity = scene.entities[objectId];
-  if (entity) return recomputeGeometryEntity(scene, entity);
-
-  return scene;
+  const entity = draft.scene.entities[objectId];
+  if (entity) recomputeGeometryEntity(draft, entity);
 }
 
-function recomputeGeometryPoint<T extends GeometryScene>(scene: T, point: GeometryPoint): T {
-  if (point.kind !== 'point2d') return scene;
-  if (!point.construction) return scene;
+function recomputeGeometryPoint<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  point: GeometryPoint,
+): void {
+  if (point.kind !== 'point2d') return;
+  if (!point.construction) return;
+
+  const scene = draft.scene;
 
   if (point.construction.kind === 'intersection') {
     const [firstId, secondId] = point.construction.sourceIds;
     const nextPosition = geometryIntersectionPoint2D(scene, firstId, secondId, point.construction.index ?? 0);
-    if (!nextPosition) return scene;
-    return updateGeometryPointPosition(scene, point, nextPosition);
+    if (!nextPosition) return;
+    updateGeometryPointPosition(draft, point, nextPosition);
+    return;
   }
 
   if (point.construction.kind === 'circumcenter') {
     const circle = geometryCircumcircle2D(scene, point.construction.pointIds);
-    return circle ? updateGeometryPointPosition(scene, point, circle.center) : scene;
+    if (circle) updateGeometryPointPosition(draft, point, circle.center);
+    return;
   }
 
-  if (point.construction.kind !== 'midpoint') return scene;
+  if (point.construction.kind !== 'midpoint') return;
 
   const [firstId, secondId] = point.construction.sourceIds;
   const first = scene.points[firstId];
   const second = scene.points[secondId];
-  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return scene;
+  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return;
 
-  return updateGeometryPointPosition(scene, point, midpoint2D(first, second));
+  updateGeometryPointPosition(draft, point, midpoint2D(first, second));
 }
 
-function recomputeGeometryEntity<T extends GeometryScene>(scene: T, entity: GeometryEntity): T {
+function recomputeGeometryEntity<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: GeometryEntity,
+): void {
+  const scene = draft.scene;
+
   if (entity.kind === 'line') {
     if (entity.construction?.kind === 'angleBisector') {
-      return recomputeAngleBisectorLine(scene, entity);
+      recomputeAngleBisectorLine(draft, entity);
+      return;
     }
 
     if (entity.construction?.kind === 'tangentLine') {
-      return recomputeTangentLine(scene, entity);
+      recomputeTangentLine(draft, entity);
+      return;
     }
 
     if (entity.construction?.kind === 'parallelLine' || entity.construction?.kind === 'perpendicularLine') {
-      return recomputeConstructedLine(scene, entity);
+      recomputeConstructedLine(draft, entity);
+      return;
     }
 
     const [firstId, secondId] = entity.pointIds;
     const first = scene.points[firstId];
     const second = scene.points[secondId];
-    if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return scene;
+    if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return;
 
     const equation = lineEquationFrom2DPoints(first, second);
-    if (!equation || sameLineEquation(entity.equation, equation)) return scene;
-    return {
-      ...scene,
-      entities: {
-        ...scene.entities,
-        [entity.id]: { ...entity, equation },
-      },
-    };
+    if (!equation || sameLineEquation(entity.equation, equation)) return;
+    setGeometryDraftEntity(draft, { ...entity, equation });
+    return;
   }
 
   if (entity.kind === 'circle' && entity.construction?.kind === 'circleCenterPoint') {
     const center = scene.points[entity.construction.centerPointId];
     const radiusPoint = scene.points[entity.construction.radiusPointId];
-    if (!isGeometryPoint2D(center) || !isGeometryPoint2D(radiusPoint)) return scene;
+    if (!isGeometryPoint2D(center) || !isGeometryPoint2D(radiusPoint)) return;
 
     const radius = distance2D(center, radiusPoint);
-    if (!Number.isFinite(radius) || radius <= 0 || nearlyEqual(entity.radius, radius)) return scene;
-    return {
-      ...scene,
-      entities: {
-        ...scene.entities,
-        [entity.id]: { ...entity, centerId: center.id, radius },
-      },
-    };
+    if (!Number.isFinite(radius) || radius <= 0 || nearlyEqual(entity.radius, radius)) return;
+    setGeometryDraftEntity(draft, { ...entity, centerId: center.id, radius });
+    return;
   }
 
   if (entity.kind === 'circle' && entity.construction?.kind === 'circleThroughPoints') {
     const circle = geometryCircumcircle2D(scene, entity.construction.pointIds);
     const center = scene.points[entity.centerId];
-    if (!circle || !isGeometryPoint2D(center)) return scene;
+    if (!circle || !isGeometryPoint2D(center)) return;
     const nextCenter = { ...center, x: circle.center.x, y: circle.center.y, hidden: true, locked: true };
     if (
       nearlyEqual(center.x, nextCenter.x)
@@ -945,37 +1014,30 @@ function recomputeGeometryEntity<T extends GeometryScene>(scene: T, entity: Geom
       && center.hidden === true
       && center.locked === true
     ) {
-      return scene;
+      return;
     }
-    return {
-      ...scene,
-      points: {
-        ...scene.points,
-        [center.id]: nextCenter,
-      },
-      entities: {
-        ...scene.entities,
-        [entity.id]: { ...entity, centerId: center.id, radius: circle.radius },
-      },
-    };
+    setGeometryDraftPoint(draft, nextCenter);
+    setGeometryDraftEntity(draft, { ...entity, centerId: center.id, radius: circle.radius });
   }
-
-  return scene;
 }
 
-function recomputeAngleBisectorLine<T extends GeometryScene>(scene: T, entity: LineEntity): T {
+function recomputeAngleBisectorLine<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: LineEntity,
+): void {
+  const scene = draft.scene;
   const construction = entity.construction;
-  if (construction?.kind !== 'angleBisector') return scene;
+  if (construction?.kind !== 'angleBisector') return;
 
   const vertex = scene.points[construction.pointIds[1]];
   const helper = scene.points[entity.pointIds[1]];
-  if (!isGeometryPoint2D(vertex) || !isGeometryPoint2D(helper)) return scene;
+  if (!isGeometryPoint2D(vertex) || !isGeometryPoint2D(helper)) return;
 
   const helperPosition = geometryAngleBisectorPoint2D(scene, construction.pointIds);
-  if (!helperPosition) return scene;
+  if (!helperPosition) return;
 
   const equation = lineEquationFrom2DPoints(vertex, helperPosition);
-  if (!equation) return scene;
+  if (!equation) return;
 
   const nextHelper = {
     ...helper,
@@ -998,29 +1060,24 @@ function recomputeAngleBisectorLine<T extends GeometryScene>(scene: T, entity: L
     && helper.hidden === true
     && helper.locked === true
   ) {
-    return scene;
+    return;
   }
 
-  return {
-    ...scene,
-    points: {
-      ...scene.points,
-      [helper.id]: nextHelper,
-    },
-    entities: {
-      ...scene.entities,
-      [entity.id]: nextEntity,
-    },
-  };
+  setGeometryDraftPoint(draft, nextHelper);
+  setGeometryDraftEntity(draft, nextEntity);
 }
 
-function recomputeTangentLine<T extends GeometryScene>(scene: T, entity: LineEntity): T {
+function recomputeTangentLine<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: LineEntity,
+): void {
+  const scene = draft.scene;
   const construction = entity.construction;
-  if (construction?.kind !== 'tangentLine') return scene;
+  if (construction?.kind !== 'tangentLine') return;
 
   const through = scene.points[construction.throughPointId];
   const helper = scene.points[entity.pointIds[1]];
-  if (!isGeometryPoint2D(through) || !isGeometryPoint2D(helper)) return scene;
+  if (!isGeometryPoint2D(through) || !isGeometryPoint2D(helper)) return;
 
   const helperPosition = geometryCircleTangentPoint2D(
     scene,
@@ -1028,10 +1085,10 @@ function recomputeTangentLine<T extends GeometryScene>(scene: T, entity: LineEnt
     construction.throughPointId,
     construction.branch,
   );
-  if (!helperPosition) return scene;
+  if (!helperPosition) return;
 
   const equation = lineEquationFrom2DPoints(through, helperPosition);
-  if (!equation) return scene;
+  if (!equation) return;
 
   const nextHelper = {
     ...helper,
@@ -1054,32 +1111,27 @@ function recomputeTangentLine<T extends GeometryScene>(scene: T, entity: LineEnt
     && helper.hidden === true
     && helper.locked === true
   ) {
-    return scene;
+    return;
   }
 
-  return {
-    ...scene,
-    points: {
-      ...scene.points,
-      [helper.id]: nextHelper,
-    },
-    entities: {
-      ...scene.entities,
-      [entity.id]: nextEntity,
-    },
-  };
+  setGeometryDraftPoint(draft, nextHelper);
+  setGeometryDraftEntity(draft, nextEntity);
 }
 
-function recomputeConstructedLine<T extends GeometryScene>(scene: T, entity: LineEntity): T {
+function recomputeConstructedLine<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: LineEntity,
+): void {
+  const scene = draft.scene;
   const construction = entity.construction;
-  if (construction?.kind !== 'parallelLine' && construction?.kind !== 'perpendicularLine') return scene;
+  if (construction?.kind !== 'parallelLine' && construction?.kind !== 'perpendicularLine') return;
 
   const through = scene.points[construction.throughPointId];
   const helper = scene.points[entity.pointIds[1]];
-  if (!isGeometryPoint2D(through) || !isGeometryPoint2D(helper)) return scene;
+  if (!isGeometryPoint2D(through) || !isGeometryPoint2D(helper)) return;
 
   const sourceEquation = lineEquationForEntity(scene, scene.entities[construction.sourceLineId]);
-  if (!sourceEquation) return scene;
+  if (!sourceEquation) return;
 
   const equation = construction.kind === 'parallelLine'
     ? normalizeGeometryLineEquation({
@@ -1092,7 +1144,7 @@ function recomputeConstructedLine<T extends GeometryScene>(scene: T, entity: Lin
       b: sourceEquation.a,
       c: -((-sourceEquation.b) * through.x + sourceEquation.a * through.y),
     });
-  if (!equation) return scene;
+  if (!equation) return;
 
   const direction = normalizeVector2D({ x: equation.b, y: -equation.a }) ?? { x: 1, y: 0 };
   const nextHelper = {
@@ -1116,35 +1168,20 @@ function recomputeConstructedLine<T extends GeometryScene>(scene: T, entity: Lin
     && helper.hidden === true
     && helper.locked === true
   ) {
-    return scene;
+    return;
   }
 
-  return {
-    ...scene,
-    points: {
-      ...scene.points,
-      [helper.id]: nextHelper,
-    },
-    entities: {
-      ...scene.entities,
-      [entity.id]: nextEntity,
-    },
-  };
+  setGeometryDraftPoint(draft, nextHelper);
+  setGeometryDraftEntity(draft, nextEntity);
 }
 
 function updateGeometryPointPosition<T extends GeometryScene>(
-  scene: T,
+  draft: GeometryRecomputeDraft<T>,
   point: GeometryPoint2D,
   position: Vector2,
-): T {
-  if (nearlyEqual(point.x, position.x) && nearlyEqual(point.y, position.y)) return scene;
-  return {
-    ...scene,
-    points: {
-      ...scene.points,
-      [point.id]: { ...point, x: position.x, y: position.y },
-    },
-  };
+): void {
+  if (nearlyEqual(point.x, position.x) && nearlyEqual(point.y, position.y)) return;
+  setGeometryDraftPoint(draft, { ...point, x: position.x, y: position.y });
 }
 
 function orderedGeometryEntityIds(scene: GeometryScene, order: string[] | undefined): string[] {

@@ -12,7 +12,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
-| 0 - Performance foundation | 1 | 8 | 0.1 landed; it measured the rest of the phase |
+| 0 - Performance foundation | 2 | 8 | 0.1 measured the phase; 0.4 removed the quadratic |
 | 1 - Make 3D dynamic | 0 | 6 | Blocked on 0.2-0.4 |
 | 2 - Close the 2D gap | 0 | 5 | |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
@@ -163,6 +163,10 @@ for scale; the gate compares the normalized figures stored alongside them.
 | `scale-drag-fanout` | **1.76** | 1.10 | P2 P3 |
 | `scale-snapshot-heap` | 1.32 | 1.10 | P8 |
 
+Since task 0.4, `drag-fanout-400` reads 7.49 ms and `scale-drag-fanout` 0.97.
+The table above is kept as recorded so the starting point stays legible; the
+committed baseline file tracks current numbers.
+
 What the numbers settle:
 
 - **P2 is real and quadratic.** `scale-drag-fanout` measures an exponent of
@@ -225,9 +229,16 @@ feature. Nothing here is user-visible.
   canonicalization and call `recomputeGeometryDependents` instead of
   `recomputeGeometryScene` (P1). Keep the full-scene path for snapshot load and
   import, where it is correct and rare.
-- [ ] **0.4 Mutable staging buffer.** Inside the recompute walk, build one draft
-  `points` and `entities` record, mutate in place, and publish once at the end
-  (P2). This is the single largest win: it turns O(k·N) allocation into O(k).
+- [x] **0.4 Mutable staging buffer.** The recompute walk now carries one draft
+  that holds the caller's scene until the first real write, then takes a single
+  shallow copy and mutates that (P2). Two properties are preserved and tested: a
+  pass that changes nothing returns the identical object, and the input scene is
+  never mutated - undo, history and collaboration all depend on old snapshots
+  staying as they were. **Result:** `drag-fanout-400` 29.19 ms → 7.49 ms
+  (3.9x), and its growth exponent 1.76 → 0.97, which meets the 1.1 target. The
+  quadratic is gone. Chain-drag allocation halved, 1.40 → 0.71 MB per drag.
+  Verified byte-identical against the previous build across every construction
+  kind, six drags and two degenerate configurations.
 - [ ] **0.5 Trust the owned path.** In `reduceOwnedGeometryLabDelta` the input
   snapshot is already canonical and already validated. Drop the pre-canonical
   full traversal and assert incrementally against the delta instead, keeping one
