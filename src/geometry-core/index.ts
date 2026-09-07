@@ -16,6 +16,12 @@ export type GeometryConstruction =
   | { kind: 'tangentLine'; circleId: string; throughPointId: string; branch: -1 | 1 }
   | { kind: 'angleBisector'; pointIds: [string, string, string] }
   | { kind: 'angleFromLines'; sourceIds: [string, string] }
+  // 3D. Where a line meets a plane, and the two points that span the line where
+  // two planes meet. Before these existed the instrument computed the position
+  // once and stored a free point, so moving the plane left the "intersection"
+  // behind - a figure that quietly stopped being true.
+  | { kind: 'linePlaneIntersection'; lineEntityId: string; planeId: string }
+  | { kind: 'planePlaneIntersection'; firstPlaneId: string; secondPlaneId: string; end: 0 | 1 }
   | { kind: 'custom'; sourceIds: string[]; label?: string };
 
 /** Serializable 2D point used by construction and whiteboard-style geometry scenes. */
@@ -388,6 +394,10 @@ export function geometryConstructionSourceIds(construction: GeometryConstruction
       return uniqueStrings([construction.sourceLineId, construction.throughPointId]);
     case 'tangentLine':
       return uniqueStrings([construction.circleId, construction.throughPointId]);
+    case 'linePlaneIntersection':
+      return uniqueStrings([construction.lineEntityId, construction.planeId]);
+    case 'planePlaneIntersection':
+      return uniqueStrings([construction.firstPlaneId, construction.secondPlaneId]);
   }
 }
 
@@ -1585,6 +1595,10 @@ function geometryConstructionKindLabel(kind: GeometryConstruction['kind']): stri
       return 'Angle bisector';
     case 'angleFromLines':
       return 'Angle from lines';
+    case 'linePlaneIntersection':
+      return 'Line-plane intersection';
+    case 'planePlaneIntersection':
+      return 'Plane-plane intersection';
     case 'custom':
       return 'Custom construction';
   }

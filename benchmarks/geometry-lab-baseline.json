@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "calibrationMs": 48.8915,
+  "calibrationMs": 48.3342,
   "gcAvailable": true,
   "samples": 25,
   "cases": {
@@ -13,10 +13,10 @@
         "P4"
       ],
       "budgetMs": 4,
-      "medianMs": 3.7143,
-      "normalizedTime": 0.07597,
-      "retainedHeapBytes": 345568,
-      "churnHeapBytes": 20110440,
+      "medianMs": 3.6211,
+      "normalizedTime": 0.07492,
+      "retainedHeapBytes": 349080,
+      "churnHeapBytes": 11461824,
       "withinBudget": true
     },
     "drag-fanout-400": {
@@ -26,10 +26,10 @@
         "P3"
       ],
       "budgetMs": 4,
-      "medianMs": 5.4739,
-      "normalizedTime": 0.11196,
+      "medianMs": 5.3546,
+      "normalizedTime": 0.11078,
       "retainedHeapBytes": 9627984,
-      "churnHeapBytes": 18613624,
+      "churnHeapBytes": 18695392,
       "withinBudget": false
     },
     "drag-mesh-4-surfaces": {
@@ -38,10 +38,10 @@
         "P11"
       ],
       "budgetMs": 4,
-      "medianMs": 0.7911,
-      "normalizedTime": 0.01618,
-      "retainedHeapBytes": 52608,
-      "churnHeapBytes": 24012584,
+      "medianMs": 0.7744,
+      "normalizedTime": 0.01602,
+      "retainedHeapBytes": 52648,
+      "churnHeapBytes": 23987064,
       "withinBudget": true
     },
     "snapshot-read-mesh": {
@@ -50,11 +50,21 @@
         "P6"
       ],
       "budgetMs": 4,
-      "medianMs": 11.6083,
-      "normalizedTime": 0.23743,
+      "medianMs": 11.6793,
+      "normalizedTime": 0.24164,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 27192864,
+      "churnHeapBytes": 27192520,
       "withinBudget": false
+    },
+    "drag-plane-10-dependents": {
+      "title": "Drag a work plane carrying 10 line-plane intersections",
+      "findings": [],
+      "budgetMs": 4,
+      "medianMs": 0.4113,
+      "normalizedTime": 0.00851,
+      "retainedHeapBytes": 479744,
+      "churnHeapBytes": 16173720,
+      "withinBudget": true
     },
     "delta-roundtrip-500": {
       "title": "Single add delta onto a 500-point 3D scene",
@@ -62,10 +72,10 @@
         "P5"
       ],
       "budgetMs": 0.5,
-      "medianMs": 3.5597,
-      "normalizedTime": 0.07281,
+      "medianMs": 3.5035,
+      "normalizedTime": 0.07249,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 10534496,
+      "churnHeapBytes": 18374880,
       "withinBudget": false
     },
     "snapshot-read-500": {
@@ -74,20 +84,20 @@
         "P6"
       ],
       "budgetMs": 0.5,
-      "medianMs": 0.5226,
-      "normalizedTime": 0.01069,
-      "retainedHeapBytes": 600,
-      "churnHeapBytes": 9546952,
+      "medianMs": 0.5245,
+      "normalizedTime": 0.01085,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 9598592,
       "withinBudget": false
     },
     "export-svg-500": {
       "title": "SVG render of a 500-point 3D scene",
       "findings": [],
       "budgetMs": 16,
-      "medianMs": 1.9418,
-      "normalizedTime": 0.03972,
+      "medianMs": 1.9719,
+      "normalizedTime": 0.0408,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 28239864,
+      "churnHeapBytes": 28238848,
       "withinBudget": true
     },
     "invariants-24": {
@@ -96,10 +106,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 0.2728,
-      "normalizedTime": 0.00558,
-      "retainedHeapBytes": 58736,
-      "churnHeapBytes": 1030744,
+      "medianMs": 0.2772,
+      "normalizedTime": 0.00574,
+      "retainedHeapBytes": 46432,
+      "churnHeapBytes": 30115488,
       "withinBudget": true
     }
   },
@@ -114,10 +124,10 @@
         100,
         400
       ],
-      "smallMs": 0.7532,
-      "largeMs": 2.61,
-      "timeExponent": 0.896,
-      "heapExponent": -0.319,
+      "smallMs": 0.7524,
+      "largeMs": 2.5643,
+      "timeExponent": 0.885,
+      "heapExponent": -0.662,
       "meetsTarget": false
     },
     "scale-drag-fanout": {
@@ -131,10 +141,10 @@
         100,
         400
       ],
-      "smallMs": 1.2621,
-      "largeMs": 5.3252,
-      "timeExponent": 1.039,
-      "heapExponent": 0.982,
+      "smallMs": 1.2434,
+      "largeMs": 5.1565,
+      "timeExponent": 1.026,
+      "heapExponent": 0.985,
       "meetsTarget": true
     },
     "scale-snapshot-heap": {
@@ -147,9 +157,9 @@
         100,
         400
       ],
-      "smallMs": 0.0672,
-      "largeMs": 0.4032,
-      "timeExponent": 1.292,
+      "smallMs": 0.0681,
+      "largeMs": 0.4028,
+      "timeExponent": 1.282,
       "heapExponent": null,
       "meetsTarget": false
     }

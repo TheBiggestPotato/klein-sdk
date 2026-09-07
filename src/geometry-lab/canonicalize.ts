@@ -90,9 +90,8 @@ export function canonicalizeGeometryLabSnapshot(
   assertRecomputableScene2D(next);
 
   const scene3d = next.scene.scene3d;
-  canonicalizePointConstructions3D(scene3d);
+  canonicalizeConstructions3D(scene3d);
   assertSupportedEntityConstructions3D(scene3d);
-  canonicalizeWorkPlanes(scene3d);
   canonicalizeSolids(scene3d);
   canonicalizeCrossSections(scene3d);
   canonicalizeNets(scene3d);
@@ -205,21 +204,38 @@ function lineLikeEquation2D(
   return first && second ? lineEquationFrom2DPoints(first, second) : null;
 }
 
-function canonicalizePointConstructions3D(scene: GeometryScene3D): void {
+/**
+ * Recomputes constructed 3D points and work planes in dependency order.
+ *
+ * <p>These were two passes: points first, then work planes. That ordering only
+ * worked because the only supported 3D point construction was a midpoint, which
+ * depends on points alone. It cannot survive intersections, because the
+ * dependency runs both ways - a work plane can be defined by three points, and
+ * a point can be defined as where a line meets that plane - so neither
+ * collection can be finished before the other.
+ *
+ * <p>One walk over both therefore, visiting each object after the objects it is
+ * built from, whichever collection those live in. Cycles are detected across
+ * both kinds rather than within each, which is what makes "a plane through a
+ * point that is defined by that plane" an error rather than a hang.
+ */
+function canonicalizeConstructions3D(scene: GeometryScene3D): void {
   const complete = new Set<string>();
   const active = new Set<string>();
 
-  const visit = (id: string): void => {
-    if (complete.has(id)) return;
+  const visitPoint = (id: string): void => {
+    const key = `point:${id}`;
+    if (complete.has(key)) return;
     const point = scene.points[id];
     if (!point) fail('unrecomputable_point', id, `Constructed point "${id}" does not exist.`);
-    if (active.has(id)) fail('unrecomputable_point', id, `Constructed point "${id}" is part of a source cycle.`);
-    active.add(id);
+    if (active.has(key)) fail('unrecomputable_point', id, `Constructed point "${id}" is part of a source cycle.`);
+    active.add(key);
+
     const construction = point.construction;
     if (construction?.kind === 'midpoint') {
       const [firstId, secondId] = construction.sourceIds;
-      if (scene.points[firstId]) visit(firstId);
-      if (scene.points[secondId]) visit(secondId);
+      if (scene.points[firstId]) visitPoint(firstId);
+      if (scene.points[secondId]) visitPoint(secondId);
       const first = scene.points[firstId];
       const second = scene.points[secondId];
       if (!first || !second) {
@@ -231,6 +247,42 @@ function canonicalizePointConstructions3D(scene: GeometryScene3D): void {
         y: (first.y + second.y) / 2,
         z: (first.z + second.z) / 2,
       };
+    } else if (construction?.kind === 'linePlaneIntersection') {
+      visitLineSources(construction.lineEntityId);
+      visitPlaneReference(construction.planeId);
+      const line = lineDataForEntity(scene, construction.lineEntityId, id);
+      const plane = planeDataForReference(scene, construction.planeId, id);
+      const position = intersectLineWithPlane(line, plane);
+      if (!position) {
+        fail(
+          'unrecomputable_point',
+          id,
+          `Line-plane intersection "${id}" no longer meets its plane in a single point.`,
+        );
+      }
+      scene.points[id] = { ...point, x: position.x, y: position.y, z: position.z };
+    } else if (construction?.kind === 'planePlaneIntersection') {
+      visitPlaneReference(construction.firstPlaneId);
+      visitPlaneReference(construction.secondPlaneId);
+      const first = planeDataForReference(scene, construction.firstPlaneId, id);
+      const second = planeDataForReference(scene, construction.secondPlaneId, id);
+      const line = intersectPlaneWithPlane(first, second);
+      if (!line) {
+        fail(
+          'unrecomputable_point',
+          id,
+          `Plane-plane intersection "${id}" no longer has a unique intersection line.`,
+        );
+      }
+      // The two endpoints sit one unit either side of the line's base point, so
+      // the pair spans the line deterministically wherever the planes move.
+      const offset = construction.end === 0 ? -1 : 1;
+      scene.points[id] = {
+        ...point,
+        x: line.point.x + line.direction.x * offset,
+        y: line.point.y + line.direction.y * offset,
+        z: line.point.z + line.direction.z * offset,
+      };
     } else if (construction) {
       fail(
         'unrecomputable_point',
@@ -238,11 +290,64 @@ function canonicalizePointConstructions3D(scene: GeometryScene3D): void {
         `3D point construction "${construction.kind}" is not deterministically supported.`,
       );
     }
-    active.delete(id);
-    complete.add(id);
+
+    active.delete(key);
+    complete.add(key);
   };
 
-  for (const id of Object.keys(scene.points).sort()) visit(id);
+  const visitPlane = (id: string): void => {
+    const key = `plane:${id}`;
+    if (complete.has(key)) return;
+    const plane = scene.workPlanes[id];
+    if (!plane) fail('unrecomputable_work_plane', id, `Work plane "${id}" does not exist.`);
+    if (active.has(key)) fail('work_plane_cycle', id, `Work plane "${id}" is part of a source cycle.`);
+
+    active.add(key);
+    const source = plane.source;
+    if (source) {
+      if (source.kind === 'parallelPlane' || source.kind === 'perpendicularPlane') {
+        visitPlaneReference(source.sourcePlaneId);
+      }
+      if (source.kind === 'perpendicularLine') visitLineSources(source.sourceEntityId);
+      if (source.kind === 'threePoints') {
+        for (const pointId of source.pointIds) {
+          if (scene.points[pointId]) visitPoint(pointId);
+        }
+      }
+      if ('throughPointId' in source && source.throughPointId && scene.points[source.throughPointId]) {
+        visitPoint(source.throughPointId);
+      }
+    }
+    scene.workPlanes[id] = canonicalWorkPlane(scene, plane);
+    active.delete(key);
+    complete.add(key);
+  };
+
+  /** A plane reference may name a work plane or a plane entity; only the former is recomputed. */
+  const visitPlaneReference = (id: string): void => {
+    if (scene.workPlanes[id]) {
+      visitPlane(id);
+      return;
+    }
+    const entity = scene.entities[id];
+    if (entity && entity.kind === 'plane') {
+      for (const pointId of entity.pointIds) {
+        if (scene.points[pointId]) visitPoint(pointId);
+      }
+    }
+  };
+
+  /** Line-like entities carry no construction of their own, but their points may. */
+  const visitLineSources = (entityId: string): void => {
+    const entity = scene.entities[entityId];
+    if (!entity || !('pointIds' in entity)) return;
+    for (const pointId of entity.pointIds) {
+      if (scene.points[pointId]) visitPoint(pointId);
+    }
+  };
+
+  for (const id of Object.keys(scene.points).sort()) visitPoint(id);
+  for (const id of Object.keys(scene.workPlanes).sort()) visitPlane(id);
 }
 
 function assertSupportedEntityConstructions3D(scene: GeometryScene3D): void {
@@ -274,27 +379,61 @@ interface PlaneData3D {
   equation: GeometryPlaneEquation3D;
 }
 
-function canonicalizeWorkPlanes(scene: GeometryScene3D): void {
-  const complete = new Set<string>();
-  const active = new Set<string>();
+/**
+ * Where a line meets a plane, or null when it runs parallel to it.
+ *
+ * <p>Parallel is a real answer rather than an error here: the caller decides
+ * what to do about a construction whose sources have moved into a degenerate
+ * arrangement, and for a constructed point that means failing canonicalization
+ * rather than leaving a stale position behind.
+ */
+function intersectLineWithPlane(
+  line: { point: Vector3; direction: Vector3 },
+  plane: PlaneData3D,
+): Vector3 | null {
+  // Normalized first, so the test below is the cosine of the angle between the
+  // line and the plane's normal rather than a quantity that shrinks with the
+  // line's length. A line whose two defining points are a picometre apart is
+  // still perfectly well conditioned, and an absolute threshold on the raw
+  // direction would call it parallel to everything.
+  const direction = normalize3(line.direction);
+  if (!direction) return null;
+  const denominator = dot3(plane.normal, direction);
+  if (Math.abs(denominator) <= EPSILON) return null;
+  // The stored equation is `n . x + d = 0`, so the plane sits at `n . x = -d`.
+  const t = (-plane.d - dot3(plane.normal, line.point)) / denominator;
+  if (!Number.isFinite(t)) return null;
+  return add3(line.point, scale3(direction, t));
+}
 
-  const visit = (id: string): void => {
-    if (complete.has(id)) return;
-    const plane = scene.workPlanes[id];
-    if (!plane) fail('unrecomputable_work_plane', id, `Work plane "${id}" does not exist.`);
-    if (active.has(id)) fail('work_plane_cycle', id, `Work plane "${id}" is part of a source cycle.`);
+/** The line where two planes meet, or null when they are parallel or coincident. */
+function intersectPlaneWithPlane(
+  first: PlaneData3D,
+  second: PlaneData3D,
+): { point: Vector3; direction: Vector3 } | null {
+  // Deliberately the same formulation as `geometryPlanePlaneIntersection3D` in
+  // geometry-core, so the position canonicalization computes is the position
+  // the instrument computed when the object was created.
+  //
+  // Conditioned on the cross product rather than on `1 - cos^2`: two planes
+  // meeting at a very shallow angle still define a perfectly good line, and
+  // testing the squared cosine rejects them long before the line itself becomes
+  // ill-conditioned.
+  const cross = cross3(first.normal, second.normal);
+  const crossLengthSquared = dot3(cross, cross);
+  if (crossLengthSquared < 1e-12) return null;
+  const direction = normalize3(cross);
+  if (!direction) return null;
 
-    active.add(id);
-    const source = plane.source;
-    if (source && (source.kind === 'parallelPlane' || source.kind === 'perpendicularPlane')) {
-      if (scene.workPlanes[source.sourcePlaneId]) visit(source.sourcePlaneId);
-    }
-    scene.workPlanes[id] = canonicalWorkPlane(scene, plane);
-    active.delete(id);
-    complete.add(id);
-  };
-
-  for (const id of Object.keys(scene.workPlanes)) visit(id);
+  const point = scale3(
+    cross3(
+      subtract3(scale3(first.normal, second.d), scale3(second.normal, first.d)),
+      cross,
+    ),
+    1 / crossLengthSquared,
+  );
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) return null;
+  return { point, direction };
 }
 
 function canonicalWorkPlane(scene: GeometryScene3D, plane: WorkPlane3D): WorkPlane3D {
@@ -1181,6 +1320,10 @@ function projectPointToPlane(point: Vector3, equation: GeometryPlaneEquation3D):
 
 function equationNormal(equation: GeometryPlaneEquation3D): Vector3 {
   return { x: equation.a, y: equation.b, z: equation.c };
+}
+
+function add3(first: Vector3, second: Vector3): Vector3 {
+  return { x: first.x + second.x, y: first.y + second.y, z: first.z + second.z };
 }
 
 function subtract3(first: Vector3, second: Vector3): Vector3 {

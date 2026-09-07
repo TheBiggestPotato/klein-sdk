@@ -13,7 +13,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
 | 0 - Performance foundation | 9 | 11 | All landed except 0.3 (declined on measurement) and 0.7 (blocked by the JSON contract) |
-| 1 - Make 3D dynamic | 0 | 6 | Blocked on 0.2-0.4 |
+| 1 - Make 3D dynamic | 4 | 6 | Intersections are live; 1.4 meshes and 1.5 cascade open |
 | 2 - Close the 2D gap | 0 | 5 | |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
 | 4 - The learning layer | 0 | 6 | 4.1 can start any time |
@@ -44,15 +44,17 @@ Run `npm run bench:geometry-lab` for the current numbers, or
 
 Three findings drive everything below.
 
-**The 3D scene is not dynamic geometry.** `canonicalize.ts:89` recomputes
-`scene.scene2d` and nothing else. No 3D point or entity carries a
-`construction`, so every derived 3D object is baked at creation and never
-updated. `addLinePlaneIntersection` (`instrument.ts:802`) computes a point and
-stores it as a free `GeometryPoint3D`; move the plane and the "intersection"
-stays where it was. The same holds for plane-plane intersections,
-cross-sections, solid vertices and nets. This is not a missing feature, it is a
-figure that silently becomes false, which in a teaching tool is worse than an
-error.
+**The 3D scene is not dynamic geometry.** `addLinePlaneIntersection` computed a
+point and stored it as a free `GeometryPoint3D`; move the plane and the
+"intersection" stayed where it was. Not a missing feature - a figure that
+silently becomes false, which in a teaching tool is worse than an error.
+
+**Half fixed by tasks 1.1-1.2.** Line-plane and plane-plane intersections now
+follow their sources, and a construction whose sources move into a degenerate
+arrangement fails the edit rather than leaving a stale position. Cross sections,
+solid vertices and nets are still baked - tasks 1.4 and 1.5. One thing the
+original wording got wrong: 3D midpoints always did recompute, so the gap was
+narrower than stated, though no less real for the objects it covered.
 
 **The Lab has no 2D API.** The `GeometryLab` interface (`types.ts:340`) exposes
 roughly forty-five methods and every one is 3D, while `GeometryLabTool` declares
@@ -557,16 +559,43 @@ gate without skipping the harness's own tests.
 The correctness fix. Depends on Phase 0.2-0.4, because it multiplies the number
 of derived objects on the recompute path.
 
-- [ ] **1.1 3D construction kinds.** Extend `GeometryConstruction`
-  (`geometry-core/index.ts:7`) with `linePlaneIntersection`,
-  `planePlaneIntersection`, `crossSection`, `solidVertex`,
-  `perpendicularFromPoint`, and the 3D forms of `midpoint` and `intersection`.
-- [ ] **1.2 3D recompute.** Add the 3D counterpart of `recomputeGeometryObject`,
-  running through the same scoped and incremental machinery from Phase 0, so 3D
-  gets the optimized path from day one rather than a second slow implementation.
-- [ ] **1.3 Migration.** Existing baked snapshots load unchanged: a point with no
-  `construction` stays free. No breaking change, no migration script. Record a
-  `constructionVersion` marker so the client can offer "relink this figure".
+- [x] **1.1 3D construction kinds.** Added `linePlaneIntersection` and
+  `planePlaneIntersection` to `GeometryConstruction`, with their source ids,
+  schema validation, dependency edges and labels. A plane-plane intersection is
+  modelled as two constructed endpoints (`end: 0 | 1`) spanning the line, so the
+  existing `lineThroughPoints` entity between them needed no new machinery.
+
+  **Correction to the verdict.** This plan opened by saying no 3D point carries
+  a construction. That was not quite right: 3D **midpoints already recomputed**,
+  in topological order with cycle detection, and every other kind was explicitly
+  rejected as "not deterministically supported". The machinery existed; what was
+  missing is that the instrument never produced anything but midpoints. The rest
+  - cross sections, solid vertices, `perpendicularFromPoint` - is still open.
+- [x] **1.2 3D recompute.** `canonicalizePointConstructions3D` and
+  `canonicalizeWorkPlanes` were two passes, points then planes. That ordering
+  only held while the sole 3D construction was a midpoint, which depends on
+  points alone. It cannot survive intersections, because the dependency runs
+  **both ways** - a work plane can be defined by three points, and a point can
+  be defined as where a line meets that plane. Replaced by
+  `canonicalizeConstructions3D`, one walk visiting each object after whatever it
+  is built from, in either collection, with cycle detection across both kinds.
+
+  Two subtleties the existing tests caught, both worth recording:
+
+  - The stored plane equation is `n . x + d = 0`, so the plane sits at
+    `n . x = -d`. Getting that backwards put intersections on the wrong side.
+  - Tolerances must be **relative**. Conditioning the line-plane test on an
+    un-normalized direction called a line whose defining points are a picometre
+    apart parallel to everything; conditioning plane-plane on `1 - cos^2`
+    rejected planes meeting at a shallow but perfectly well-defined angle. The
+    plane-plane formulation now mirrors `geometryPlanePlaneIntersection3D` in
+    geometry-core exactly, so canonicalization computes the position the
+    instrument computed on creation.
+- [x] **1.3 Migration.** No script and no marker needed after all: a point with
+  no `construction` is a free point, which is exactly what every previously
+  persisted snapshot contains, so old scenes load and behave identically. Tested
+  directly. Relinking an old baked figure to its sources stays a client-side
+  offer if it is ever wanted; nothing in the format forces it.
 - [ ] **1.4 Lazy mesh regeneration.** Cross-sections and solids keep baked
   meshes, but store their generator parameters and a dirty flag; regenerate on
   read, not on every delta. A dragged plane with three dependent cross-sections
@@ -577,8 +606,11 @@ of derived objects on the recompute path.
   (`dependencies.ts:268`) already models delete policies; extend it to the new
   construction edges so deleting a plane does the right thing to everything
   derived from it.
-- [ ] **1.6 Perf gate.** Add a benchmark case: drag a work plane with ten
-  dependents, assert the drag budget.
+- [x] **1.6 Perf gate.** `drag-plane-10-dependents` drags a plane carrying ten
+  line-plane intersections, each of which must be recomputed in dependency order
+  inside the commit: **0.41 ms** against the 4 ms budget. The case only became
+  measurable once the intersections became real - before Phase 1 they were free
+  points that cost nothing to leave wrong.
 
 Exit criteria: moving a source object updates every derived 3D object; no baked
 value is ever displayed as if it were live.

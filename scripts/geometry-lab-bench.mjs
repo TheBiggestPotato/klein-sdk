@@ -192,6 +192,35 @@ export function buildSurfaceScene(surfaceCount) {
   return { lab, dragId };
 }
 
+/**
+ * A work plane with many line-plane intersections hanging off it.
+ *
+ * <p>Phase 1's shape: dragging one of the plane's defining points has to
+ * recompute the plane and then every intersection derived from it, in
+ * dependency order, inside the same commit. Before Phase 1 those intersections
+ * were free points and cost nothing to "recompute" - they simply stopped being
+ * true - so this case only became measurable once they became real.
+ */
+export function buildDynamicPlaneScene(dependentCount) {
+  const lab = createGeometryLab();
+  const corners = [
+    lab.addPoint3D({ x: 0, y: 0, z: 0 }),
+    lab.addPoint3D({ x: 1, y: 0, z: 0 }),
+    lab.addPoint3D({ x: 0, y: 1, z: 0 }),
+  ];
+  const plane = lab.addWorkPlaneByThreePoints(corners);
+  for (let index = 0; index < dependentCount; index += 1) {
+    const x = coordinate(index, 7);
+    const y = coordinate(index, 8);
+    const line = lab.addLine3D(
+      lab.addPoint3D({ x, y, z: -5 }),
+      lab.addPoint3D({ x, y, z: 5 }),
+    );
+    lab.addLinePlaneIntersection(line, plane);
+  }
+  return { lab, dragId: corners[2] };
+}
+
 /** A 2D figure sized for the invariant reporter, whose own cap is 24 points. */
 export function buildInvariantScene(pointCount) {
   const lab = createGeometryLab();
@@ -376,6 +405,16 @@ export const CASES = [
     run() {
       const { lab } = buildSurfaceScene(4);
       return () => lab.getSnapshot();
+    },
+  },
+  {
+    id: 'drag-plane-10-dependents',
+    title: 'Drag a work plane carrying 10 line-plane intersections',
+    findings: [],
+    budgetMs: 4,
+    run() {
+      const { lab, dragId } = buildDynamicPlaneScene(10);
+      return (index) => lab.applyDelta({ op: 'updatePoint', id: dragId, changes: { z: (index % 20) * 0.05 } });
     },
   },
   {

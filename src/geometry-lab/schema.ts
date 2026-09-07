@@ -90,6 +90,8 @@ const GEOMETRY_CONSTRUCTION_KINDS: Record<GeometryConstruction['kind'], true> = 
   tangentLine: true,
   angleBisector: true,
   angleFromLines: true,
+  linePlaneIntersection: true,
+  planePlaneIntersection: true,
   custom: true,
 };
 
@@ -412,6 +414,17 @@ function validateConstruction(value: unknown, path: string, context: ValidationC
     rejectUnknown(record, path, context, ['kind', 'sourceLineId', 'throughPointId']);
     required(record, 'sourceLineId', path, context, nonEmptyString);
     required(record, 'throughPointId', path, context, nonEmptyString);
+  } else if (kind === 'linePlaneIntersection') {
+    rejectUnknown(record, path, context, ['kind', 'lineEntityId', 'planeId']);
+    required(record, 'lineEntityId', path, context, nonEmptyString);
+    required(record, 'planeId', path, context, nonEmptyString);
+  } else if (kind === 'planePlaneIntersection') {
+    rejectUnknown(record, path, context, ['kind', 'firstPlaneId', 'secondPlaneId', 'end']);
+    required(record, 'firstPlaneId', path, context, nonEmptyString);
+    required(record, 'secondPlaneId', path, context, nonEmptyString);
+    // Two planes meet in a line, which the model stores as two constructed
+    // endpoints; `end` says which of them this point is.
+    required(record, 'end', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, [0, 1]));
   } else if (kind === 'tangentLine') {
     rejectUnknown(record, path, context, ['kind', 'circleId', 'throughPointId', 'branch']);
     required(record, 'circleId', path, context, nonEmptyString);

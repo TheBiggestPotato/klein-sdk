@@ -18,6 +18,7 @@ import {
   planeEquationFrom3DPoints,
 } from '../geometry-core/index.js';
 import type {
+  GeometryConstruction,
   GeometryLine3D,
   GeometryPlaneEquation3D,
   GeometryPoint3D,
@@ -832,7 +833,11 @@ class GeometryLabInstrument implements GeometryLab {
     const plane = this.#requirePlaneData(planeId);
     const point = intersectLinePlane(line, plane);
     if (!point) throw new KleinSdkError('parallel_line_plane', 'Line and plane do not intersect in a finite point.');
-    const created = this.#makePoint3D({ ...point, ...style });
+    const created = this.#makePoint3D({
+      ...point,
+      ...style,
+      construction: { kind: 'linePlaneIntersection', lineEntityId, planeId },
+    });
     this.#commitDelta({ op: 'addPoint3D', point: created });
     return created.id;
   }
@@ -843,8 +848,18 @@ class GeometryLabInstrument implements GeometryLab {
     const second = this.#requirePlaneData(secondPlaneId);
     const line = intersectPlanes(first, second);
     if (!line) throw new KleinSdkError('parallel_planes', 'Parallel planes do not form an intersection line.');
-    const start = this.#makePoint3D({ ...add3(line.point, scale3(line.direction, -1)), hidden: true, locked: true });
-    const end = this.#makePoint3D({ ...add3(line.point, line.direction), hidden: true, locked: true });
+    const start = this.#makePoint3D({
+      ...add3(line.point, scale3(line.direction, -1)),
+      hidden: true,
+      locked: true,
+      construction: { kind: 'planePlaneIntersection', firstPlaneId, secondPlaneId, end: 0 },
+    });
+    const end = this.#makePoint3D({
+      ...add3(line.point, line.direction),
+      hidden: true,
+      locked: true,
+      construction: { kind: 'planePlaneIntersection', firstPlaneId, secondPlaneId, end: 1 },
+    });
     const entity = withEntity3DStyle<LineEntity>({
       id: this.#ids.next('line3'),
       kind: 'line',
@@ -1313,7 +1328,9 @@ class GeometryLabInstrument implements GeometryLab {
     return entity.id;
   }
 
-  #makePoint3D(point: Vector3 & GeometryLabStyleOptions): GeometryPoint3D {
+  #makePoint3D(
+    point: Vector3 & GeometryLabStyleOptions & { construction?: GeometryConstruction },
+  ): GeometryPoint3D {
     const next: GeometryPoint3D = {
       id: this.#ids.next('p3'),
       kind: 'point3d',
@@ -1325,6 +1342,9 @@ class GeometryLabInstrument implements GeometryLab {
     if (point.color !== undefined) next.color = point.color;
     if (point.hidden !== undefined) next.hidden = point.hidden;
     if (point.locked !== undefined) next.locked = point.locked;
+    // Carried so canonicalization can rebuild the position whenever a source
+    // moves. The coordinates above are only the value at creation time.
+    if (point.construction !== undefined) next.construction = point.construction;
     return next;
   }
 
