@@ -1,0 +1,133 @@
+{
+  "schema": 1,
+  "calibrationMs": 49.0649,
+  "gcAvailable": true,
+  "samples": 25,
+  "cases": {
+    "drag-chain-500": {
+      "title": "Drag one point, 500-object chain scene",
+      "findings": [
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "budgetMs": 4,
+      "medianMs": 5.3444,
+      "normalizedTime": 0.10893,
+      "retainedHeapBytes": 208528,
+      "churnHeapBytes": 36587432,
+      "withinBudget": false
+    },
+    "drag-fanout-400": {
+      "title": "Drag a hub with 400 dependents",
+      "findings": [
+        "P2",
+        "P3"
+      ],
+      "budgetMs": 4,
+      "medianMs": 29.1883,
+      "normalizedTime": 0.59489,
+      "retainedHeapBytes": 9611376,
+      "churnHeapBytes": 45322632,
+      "withinBudget": false
+    },
+    "delta-roundtrip-500": {
+      "title": "Single add delta onto a 500-point 3D scene",
+      "findings": [
+        "P5"
+      ],
+      "budgetMs": 0.5,
+      "medianMs": 5.5329,
+      "normalizedTime": 0.11277,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 30466848,
+      "withinBudget": false
+    },
+    "snapshot-read-500": {
+      "title": "getSnapshot() on a 500-point 3D scene",
+      "findings": [
+        "P6"
+      ],
+      "budgetMs": 0.5,
+      "medianMs": 0.5299,
+      "normalizedTime": 0.0108,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 9597752,
+      "withinBudget": false
+    },
+    "export-svg-500": {
+      "title": "SVG render of a 500-point 3D scene",
+      "findings": [],
+      "budgetMs": 16,
+      "medianMs": 1.9409,
+      "normalizedTime": 0.03956,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 29774632,
+      "withinBudget": true
+    },
+    "invariants-24": {
+      "title": "computeGeometryInvariants at the current 24-point cap",
+      "findings": [
+        "P9"
+      ],
+      "budgetMs": 8,
+      "medianMs": 0.2771,
+      "normalizedTime": 0.00565,
+      "retainedHeapBytes": 53696,
+      "churnHeapBytes": 7536440,
+      "withinBudget": true
+    }
+  },
+  "scaling": {
+    "scale-drag-chain": {
+      "title": "Drag cost against scene size (chain)",
+      "findings": [
+        "P1"
+      ],
+      "targetExponent": 0.2,
+      "sizes": [
+        100,
+        400
+      ],
+      "smallMs": 1.0358,
+      "largeMs": 3.7585,
+      "timeExponent": 0.93,
+      "heapExponent": -0.473,
+      "meetsTarget": false
+    },
+    "scale-drag-fanout": {
+      "title": "Drag cost against dependent count (fan-out)",
+      "findings": [
+        "P2",
+        "P3"
+      ],
+      "targetExponent": 1.1,
+      "sizes": [
+        100,
+        400
+      ],
+      "smallMs": 2.5272,
+      "largeMs": 28.7791,
+      "timeExponent": 1.755,
+      "heapExponent": 0.981,
+      "meetsTarget": false
+    },
+    "scale-snapshot-heap": {
+      "title": "Retained snapshot heap against scene size",
+      "findings": [
+        "P8"
+      ],
+      "targetExponent": 1.1,
+      "sizes": [
+        100,
+        400
+      ],
+      "smallMs": 0.0651,
+      "largeMs": 0.4048,
+      "timeExponent": 1.318,
+      "heapExponent": null,
+      "meetsTarget": false
+    }
+  }
+}

@@ -142,13 +142,16 @@
     "test": "npm run typecheck",
     "test:graphing": "npm run build && node scripts/graphing-smoke.mjs",
     "test:collab": "npm run build && node --test tests/collab/*.test.mjs && node scripts/collab-reliability-smoke.mjs",
-    "test:geometry-lab": "npm run build && node --test tests/geometry-lab/*.test.mjs",
+    "test:geometry-lab": "npm run build && node --expose-gc --test tests/geometry-lab/*.test.mjs",
+    "bench:geometry-lab": "npm run build && node --expose-gc scripts/geometry-lab-bench.mjs",
+    "bench:geometry-lab:check": "npm run build && node --expose-gc scripts/geometry-lab-bench.mjs --check",
+    "bench:geometry-lab:update": "npm run build && node --expose-gc scripts/geometry-lab-bench.mjs --update-baseline",
     "test:assessment": "npm run build && node --test tests/assessment/*.test.mjs",
     "test:phase6": "npm run build && node scripts/phase6-smoke.mjs",
     "test:phase7": "npm run build && node scripts/phase7-smoke.mjs",
     "test:phase8": "npm run build && node scripts/phase8-smoke.mjs",
     "test:v0": "npm run build && node scripts/geogebra-v0-smoke.mjs && node scripts/collab-reliability-smoke.mjs",
-    "test:ci": "npm run typecheck && npm run build && node --test tests/assessment/*.test.mjs tests/collab/*.test.mjs tests/geometry-lab/*.test.mjs && node scripts/geogebra-v0-smoke.mjs && node scripts/collab-reliability-smoke.mjs && node scripts/graphing-smoke.mjs",
+    "test:ci": "npm run typecheck && npm run build && node --expose-gc --test tests/assessment/*.test.mjs tests/collab/*.test.mjs tests/geometry-lab/*.test.mjs && node scripts/geogebra-v0-smoke.mjs && node scripts/collab-reliability-smoke.mjs && node scripts/graphing-smoke.mjs",
     "pack:local": "npm pack"
   },
   "devDependencies": {
