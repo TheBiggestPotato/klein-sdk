@@ -12,7 +12,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
-| 0 - Performance foundation | 3 | 9 | 0.1 measured, 0.4 removed the quadratic, 0.5 trimmed the delta path; 0.9 added from the profile |
+| 0 - Performance foundation | 4 | 9 | 0.1 measured; 0.4 removed the quadratic; 0.5 and 0.2 landed; 0.3 measured and declined; 0.9 is the remaining win |
 | 1 - Make 3D dynamic | 0 | 6 | Blocked on 0.2-0.4 |
 | 2 - Close the 2D gap | 0 | 5 | |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
@@ -77,12 +77,15 @@ or a five-hundred-object figure.
 
 ### P1. Full-scene recompute on every delta
 
-`canonicalize.ts:89` calls `recomputeGeometryScene(scene2d)`, which
-(`geometry-core/index.ts:824`) visits **every** point and entity, not only the
-derived ones. `canonicalizeGeometryLabBoundary` (`reducer.ts:503`) runs on every
-committed delta, including through the owned fast path
-`reduceOwnedGeometryLabDelta` (`reducer.ts:177`, canonicalizing at line 204).
+`canonicalize.ts:89` calls `recomputeGeometryScene(scene2d)`, which visits
+**every** point and entity, not only the derived ones, on every committed delta.
 Moving one point costs a full-scene pass.
+
+**Overstated as written, and closed.** Measured, that pass is 0.12 ms of a
+4.8 ms drag on 500 objects. Scoping it was tried and is *slower* than leaving it
+alone - see task 0.3 - because building the reverse index costs more than the
+walk it avoids. The O(N) growth a drag really shows comes from the per-delta
+whole-snapshot passes in [Section 2b](#2b-per-delta-profile), not from here.
 
 ### P2. Whole-record copy per recomputed object
 
@@ -93,16 +96,20 @@ is **O(N²) allocation**.
 
 ### P3. Dependency graph rebuilt on every query
 
-`geometryDependentsOf` (`geometry-core/index.ts:805`) calls
-`buildGeometryDependencyGraph` on every invocation - a full O(V+E) rebuild per
-drag frame. Inside it (`:779`), `existing.includes(id)` scans linearly and
-`dependentsById[sourceId] = [...existing, id]` reallocates the array per edge,
-making edge insertion O(d) time and O(d) garbage, so O(d²) per node.
+`geometryDependentsOf` called `buildGeometryDependencyGraph` on every
+invocation - a full O(V+E) rebuild. Inside it, `existing.includes(id)` scanned
+linearly and `dependentsById[sourceId] = [...existing, id]` reallocated the
+array per edge, making edge insertion O(d) time and O(d) garbage, so O(d²) per
+node.
+
+**Fixed by task 0.2**, 6.1x on the quadratic shape. Note this was never on the
+drag path, since the drag path does not consult the graph; it is the object
+panel, delete planning and `getDependencyGraph()` that pay it.
 
 ### P4. Quadratic breadth-first traversal
 
-`geometryDependentsOf` uses `queue.shift()` (`:812`), which is O(n) on a
-JavaScript array, so the traversal is O(n²).
+`geometryDependentsOf` used `queue.shift()`, which is O(n) on a JavaScript
+array, so the traversal was O(n²). **Fixed by task 0.2** with an index cursor.
 
 ### P5. Repeated full-snapshot complexity traversals
 
@@ -250,15 +257,54 @@ feature. Nothing here is user-visible.
   `benchmarks/geometry-lab-baseline.json` (committed baseline). Wired into
   `test:ci` and `test:geometry-lab`, both now running under `--expose-gc`.
   See [Section 2a](#2a-measured-baseline) for what it measured.
-- [ ] **0.2 Incremental dependency graph.** Build once, maintain on delta rather
-  than rebuilding per query (P3). Store it in the instrument, or in a `WeakMap`
-  keyed by the snapshot object so it is never serialized. Replace
-  `includes` + array spread with `Set` and `Map`; replace `queue.shift()` with
-  an index cursor (P4).
-- [ ] **0.3 Scoped recompute.** Thread `changedIds` from the reducer into
-  canonicalization and call `recomputeGeometryDependents` instead of
-  `recomputeGeometryScene` (P1). Keep the full-scene path for snapshot load and
-  import, where it is correct and rare.
+- [x] **0.2 Dependency graph.** Edge insertion was `includes` followed by
+  `[...existing, id]` - O(d) time and a fresh array per edge, so O(d²) on a
+  heavily depended-on object, which is exactly what a dragged control point is.
+  It now pushes, and the dedup scan was redundant anyway since an object's
+  dependency list is already unique and each id is visited once (P3). The
+  traversal uses an index cursor instead of `queue.shift()` (P4). Graphs are
+  cached in a `WeakMap` keyed by the scene's own identity, so a cache entry can
+  never outlive the scene it describes; the public
+  `buildGeometryDependencyGraph` still returns a fresh graph, because the
+  instrument hands it straight to hosts that may mutate it.
+
+  **Result**, worst on the quadratic shape: `buildGeometryDependencyGraph` on a
+  1,600-dependent hub 2.95 ms → 0.49 ms (6.1x), and the growth across 400 →
+  1,600 dependents falls from 7.5x to 2.3x. `geometryDependentsOf` 11x-54x.
+  `summarizeGeometryObjects` on 2,000 objects 0.75 ms → 0.35 ms (2.2x), which
+  is the object panel. Graph, traversals and summaries verified identical to
+  the previous build, including raw ordering.
+
+- [ ] **0.3 Scoped recompute.** *Not done - measurement says do not.* The task
+  was to call `recomputeGeometryDependents` instead of `recomputeGeometryScene`
+  in canonicalization. Measured both ways on a fresh scene per call, as a real
+  drag has, **after** 0.2 had made the graph cheaper:
+
+  | Scene | Full | Scoped | |
+  | --- | --: | --: | --- |
+  | chain 500 | 0.28 ms | 0.37 ms | 1.35x slower |
+  | chain 2,000 | 0.85 ms | 1.19 ms | 1.40x slower |
+  | fan-out 500 | 0.38 ms | 0.81 ms | 2.13x slower |
+  | fan-out 2,000 | 1.19 ms | 2.21 ms | 1.85x slower |
+
+  Scoping costs more than it saves: building the reverse index calls
+  `geometryObjectDependencies` for every object and allocates an array per
+  object, while the full recompute's per-object cost for the common case - an
+  object with no `construction` - is a property read and an early return. Paying
+  O(V+E) with allocation to avoid O(N) without it is a bad trade at every size
+  tested.
+
+  It could only pay if the graph were maintained incrementally across deltas
+  rather than rebuilt per scene, and even then the ceiling is the full
+  recompute's 0.28-0.85 ms out of a ~4.8 ms drag, so 6-16%. Task 0.9 is worth
+  more than that and carries less risk, since a stale dependency graph produces
+  wrong geometry silently. **Revisit only after 0.9, and only with incremental
+  graph maintenance.**
+
+  This also corrects finding P1: the full-scene recompute is not what makes a
+  drag scale with scene size. At 500 objects it is 0.12 ms of a 4.8 ms drag.
+  The O(N) growth comes from the per-delta whole-snapshot passes in
+  [Section 2b](#2b-per-delta-profile).
 - [x] **0.4 Mutable staging buffer.** The recompute walk now carries one draft
   that holds the caller's scene until the first real write, then takes a single
   shallow copy and mutates that (P2). Two properties are preserved and tested: a

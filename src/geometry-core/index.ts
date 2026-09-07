@@ -703,7 +703,7 @@ export function summarizeGeometryObjects(
   scene: GeometryScene,
   options: GeometryObjectSummaryOptions = {},
 ): GeometryObjectSummary[] {
-  const graph = buildGeometryDependencyGraph(scene);
+  const graph = cachedGeometryDependencyGraph(scene);
   const result: GeometryObjectSummary[] = [];
 
   for (const point of Object.values(scene.points)) {
@@ -777,6 +777,32 @@ export function summarizeGeometryConstraints(scene: GeometryScene): GeometryCons
 
 /** Builds a dependency graph for the whole scene. */
 export function buildGeometryDependencyGraph(scene: GeometryScene): GeometryDependencyGraph {
+  // Public callers receive their own graph. The instrument hands this straight
+  // out to hosts, which are free to mutate what they are given, so the shared
+  // cache below is never exposed.
+  return computeGeometryDependencyGraph(scene);
+}
+
+/**
+ * Graphs keyed by the exact scene object they describe.
+ *
+ * <p>Keyed by identity, so it cannot go stale: any edit produces a new scene
+ * object, which is a new key and a fresh build. What it saves is the repeated
+ * build within one scene - an object panel asking for summaries, then rows,
+ * then a delete plan, all against the same snapshot, used to rebuild the whole
+ * graph each time.
+ */
+const geometryDependencyGraphCache = new WeakMap<GeometryScene, GeometryDependencyGraph>();
+
+function cachedGeometryDependencyGraph(scene: GeometryScene): GeometryDependencyGraph {
+  const cached = geometryDependencyGraphCache.get(scene);
+  if (cached) return cached;
+  const graph = computeGeometryDependencyGraph(scene);
+  geometryDependencyGraphCache.set(scene, graph);
+  return graph;
+}
+
+function computeGeometryDependencyGraph(scene: GeometryScene): GeometryDependencyGraph {
   const dependenciesById: Record<string, string[]> = {};
   const dependentsById: Record<string, string[]> = {};
   const ids = [
@@ -786,16 +812,21 @@ export function buildGeometryDependencyGraph(scene: GeometryScene): GeometryDepe
   ];
 
   for (const id of ids) {
-    const dependencies = geometryObjectDependencies(scene, id).filter(sourceId => sourceId !== id);
-    dependenciesById[id] = dependencies;
-    for (const sourceId of dependencies) {
-      const existing = dependentsById[sourceId] ?? [];
-      if (!existing.includes(id)) dependentsById[sourceId] = [...existing, id];
-    }
+    dependentsById[id] = [];
   }
 
   for (const id of ids) {
-    dependentsById[id] ??= [];
+    const dependencies = geometryObjectDependencies(scene, id).filter(sourceId => sourceId !== id);
+    dependenciesById[id] = dependencies;
+    for (const sourceId of dependencies) {
+      // Pushed rather than rebuilt. This used to be `includes` followed by
+      // `[...existing, id]`, which is O(d) time and a fresh array per edge, so
+      // O(d^2) on a heavily depended-on object - the shape a dragged control
+      // point has. The scan was also redundant: an object's dependency list is
+      // already unique, and each id is visited once, so the same edge cannot
+      // be offered twice.
+      (dependentsById[sourceId] ??= []).push(id);
+    }
   }
 
   return { dependenciesById, dependentsById };
@@ -803,13 +834,14 @@ export function buildGeometryDependencyGraph(scene: GeometryScene): GeometryDepe
 
 /** Returns all transitively dependent ids for a set of changed source ids. */
 export function geometryDependentsOf(scene: GeometryScene, changedIds: Iterable<string>): string[] {
-  const graph = buildGeometryDependencyGraph(scene);
+  const graph = cachedGeometryDependencyGraph(scene);
   const visited = new Set<string>();
-  const queue = [...changedIds];
-
-  while (queue.length > 0) {
-    const id = queue.shift();
-    if (!id) continue;
+  // A cursor rather than `shift()`, which is O(n) on an array and made this
+  // traversal quadratic in the number of dependents it walked.
+  const queue: string[] = [...changedIds];
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const id = queue[cursor];
+    if (id === undefined) continue;
     for (const dependentId of graph.dependentsById[id] ?? []) {
       if (visited.has(dependentId)) continue;
       visited.add(dependentId);
