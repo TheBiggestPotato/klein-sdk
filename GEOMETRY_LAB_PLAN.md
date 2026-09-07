@@ -12,7 +12,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
-| 0 - Performance foundation | 7 | 10 | 0.1, 0.2, 0.4, 0.5, 0.6, 0.8, 0.9 landed; 0.3 declined on measurement; 0.7 blocked, split into 0.10 |
+| 0 - Performance foundation | 8 | 11 | 0.1, 0.2, 0.4, 0.5, 0.6, 0.8, 0.9, 0.10 landed; 0.3 declined; 0.7 blocked; 0.11 opened from 0.10 |
 | 1 - Make 3D dynamic | 0 | 6 | Blocked on 0.2-0.4 |
 | 2 - Close the 2D gap | 0 | 5 | |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
@@ -144,10 +144,14 @@ and entries are serialized JSON patches.
 
 ### P11. Per-edit cost scales with mesh size
 
-Moving one unrelated point in a four-surface scene costs 28.7 ms, 62% of it the
+Moving one unrelated point in a four-surface scene cost 28.7 ms, 62% of it the
 generic untrusted-input JSON walk inside the complexity assertion. This is the
 finding P8 was reaching for, and it is much larger than the storage format.
-**Task 0.10.**
+
+**Mostly addressed by task 0.10**, which took the complexity scan from 17.9 ms
+to 0.32 ms and schema validation from 7.0 ms to 0.01 ms, bringing the edit to
+10.6 ms. The remaining ~7 ms is unattributed and is task 0.11. The benchmark now
+carries `drag-mesh-4-surfaces`, so this no longer hides.
 
 ### P8. Mesh geometry stored as object arrays
 
@@ -412,29 +416,55 @@ feature. Nothing here is user-visible.
   change to the persistence and collaboration contracts, not an optimisation.
   **Recommend splitting it** and doing task 0.10 first, which is worth more.
 
-- [ ] **0.10 Stop rescanning meshes on every edit.** *Added from the 0.7
-  investigation, and larger than 0.7.* Moving one unrelated point in a
-  four-surface scene costs **28.7 ms**, and it is not storage:
+- [x] **0.10 Stop rescanning meshes on every edit.** Two caches, both keyed by
+  object identity, both remembering only *clean* results so every failure is
+  still reported at exactly the path and in exactly the order it was before.
 
-  | Stage | Cost |
-  | --- | --: |
-  | `assertGeometryLabSnapshotComplexity` | 17.9 ms |
-  | `validateGeometryLabSnapshotStrict` | 7.0 ms |
-  | `getGeometryLabInvariantIssues` | 3.2 ms |
-  | `canonicalize` (mesh caches reused) | 0.01 ms |
+  - `scanUnknownJson` in `complexity.ts` memoizes any subtree of 64 nodes or
+    more that scanned cleanly. Reuse requires the same limits profile, and the
+    cached totals must still fit inside every running limit - otherwise the
+    subtree is re-walked so the issue lands at the right path. To make profile
+    comparison an identity check, `resolveGeometryLabComplexityLimits` now
+    returns the same resolved object for the same overrides object.
+  - `recordMap` in `schema.ts` memoizes records that passed a given validator.
+    One change covers points, entities, work planes, measurements and nets in
+    both scenes. The id-versus-key check stays outside the cache, because it
+    depends on where a record is filed rather than on the record.
 
-  The complexity assertion alone is 4.6x the cost of serialising the entire
-  snapshot, because `preflightGeometryLabSnapshotComplexity` runs
-  `scanUnknownJson` - a generic untrusted-input walk over every vertex and face
-  - before the structural checks. That walk is exactly right for
-  `loadSnapshot` and `importJson`, where the input is untrusted. On the owned
-  path the content came from an already-scanned snapshot plus an already-scanned
-  delta, and the structural half (`inspectSnapshot`) is what actually enforces
-  the caps. Canonicalization already solves this shape with
-  `reuseSurfaceMeshCaches` and costs 0.01 ms, which is the model to follow.
+  **Result**, on a four-surface scene (36,864 vertices):
 
-  Note this is a resource bound, not an integrity check: a missed bound means
-  memory growth, not corruption - so it carries less risk than task 0.9 did.
+  | Stage | Before | After |
+  | --- | --: | --: |
+  | `assertGeometryLabSnapshotComplexity` | 17.88 ms | 0.32 ms |
+  | `validateGeometryLabSnapshotStrict` | 7.02 ms | 0.01 ms |
+  | `getGeometryLabInvariantIssues` | 3.15 ms | 3.18 ms |
+  | whole `applyDelta` | 28.7 ms | 10.6 ms |
+
+  Verified against the previous build over two corpora: 58 complexity scans
+  covering repeat scans, eleven limit profiles interleaved with the default, a
+  shared limits object, shared subtrees, cycles and deep/wide/long violations
+  (462 limit hits in total); and 29 schema validations covering valid records,
+  every corruption class, differing issue budgets, and one record object filed
+  under both a matching and a mismatching key. Identical in both.
+
+  **The benchmark had no mesh case, which is why none of this was visible.**
+  Added `drag-mesh-4-surfaces` and `snapshot-read-mesh`, so this class of cost
+  is now gated rather than discovered by accident.
+
+  **Not finished.** `applyDelta` on that scene is 10.6 ms against a 4 ms budget,
+  and the named stages now account for only 3.5 ms of it. The remaining ~7 ms is
+  in the instrument wrapper, is not history (measured with history disabled: no
+  change), and needs its own profile. Tracked as task 0.11.
+
+- [ ] **0.11 Find the rest of the mesh-scene delta cost.** After 0.10,
+  `drag-mesh-4-surfaces` is 10.6 ms while `reduceOwnedGeometryLabDelta` measures
+  3.45 ms and the three whole-snapshot passes sum to 3.5 ms. Roughly 7 ms is
+  unattributed, somewhere between `GeometryLabInstrument.applyDelta` and the
+  reducer. Ruled out so far: history capture, equation-surface cache
+  canonicalization, delta complexity assertion, and rendering (the instrument is
+  unmounted in the benchmark). Profile before changing anything - three of the
+  seven Phase 0 tasks so far were scoped from assumptions that measurement
+  overturned.
 - [x] **0.9 Cheaper integrity checking.** *Added after the task 0.5 profile, and
   solved differently from how it was scoped.*
 

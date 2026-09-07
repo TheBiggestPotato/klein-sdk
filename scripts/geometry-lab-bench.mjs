@@ -164,6 +164,34 @@ export function build3DScene(pointCount) {
   return { lab, pointIds };
 }
 
+/**
+ * A scene dominated by sampled surface meshes.
+ *
+ * <p>Added after task 0.10, which found that moving one unrelated point in a
+ * scene like this cost 28.7 ms - and that none of the cases above could see it,
+ * because they are all made of points and segments. Mesh entities are where the
+ * per-edit whole-snapshot passes actually hurt: a single 96x96 surface holds
+ * 9,216 vertex objects, so an edit that rescans the snapshot pays for all of
+ * them however small the edit was.
+ */
+export function buildSurfaceScene(surfaceCount) {
+  const lab = createGeometryLab();
+  for (let index = 0; index < surfaceCount; index += 1) {
+    lab.addSurfaceZ({
+      xRange: [-5, 5],
+      yRange: [-5, 5],
+      xSamples: 96,
+      ySamples: 96,
+      input: `z = sin(x) * cos(y) + ${index}`,
+      z: (x, y) => Math.sin(x) * Math.cos(y) + index,
+    });
+  }
+  // The point being dragged depends on nothing and nothing depends on it, so
+  // whatever this case measures is overhead rather than real recomputation.
+  const dragId = lab.addPoint3D({ x: 0, y: 0, z: 0 });
+  return { lab, dragId };
+}
+
 /** A 2D figure sized for the invariant reporter, whose own cap is 24 points. */
 export function buildInvariantScene(pointCount) {
   const lab = createGeometryLab();
@@ -328,6 +356,26 @@ export const CASES = [
     run() {
       const { lab, dragId } = buildFanoutScene(400);
       return (index) => lab.applyDelta({ op: 'updatePoint', id: dragId, changes: { x: index * 0.01 } });
+    },
+  },
+  {
+    id: 'drag-mesh-4-surfaces',
+    title: 'Move one unrelated point in a 4-surface scene (36,864 vertices)',
+    findings: ['P11'],
+    budgetMs: 4,
+    run() {
+      const { lab, dragId } = buildSurfaceScene(4);
+      return (index) => lab.applyDelta({ op: 'updatePoint', id: dragId, changes: { x: index * 0.01 } });
+    },
+  },
+  {
+    id: 'snapshot-read-mesh',
+    title: 'getSnapshot() on a 4-surface scene',
+    findings: ['P6'],
+    budgetMs: 4,
+    run() {
+      const { lab } = buildSurfaceScene(4);
+      return () => lab.getSnapshot();
     },
   },
   {

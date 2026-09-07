@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "calibrationMs": 48.3602,
+  "calibrationMs": 48.9113,
   "gcAvailable": true,
   "samples": 25,
   "cases": {
@@ -13,10 +13,10 @@
         "P4"
       ],
       "budgetMs": 4,
-      "medianMs": 3.3686,
-      "normalizedTime": 0.06966,
-      "retainedHeapBytes": 211936,
-      "churnHeapBytes": 13327360,
+      "medianMs": 3.7245,
+      "normalizedTime": 0.07615,
+      "retainedHeapBytes": 345568,
+      "churnHeapBytes": 11484984,
       "withinBudget": true
     },
     "drag-fanout-400": {
@@ -26,10 +26,34 @@
         "P3"
       ],
       "budgetMs": 4,
-      "medianMs": 5.0164,
-      "normalizedTime": 0.10373,
-      "retainedHeapBytes": 9592488,
-      "churnHeapBytes": 25711008,
+      "medianMs": 5.5572,
+      "normalizedTime": 0.11362,
+      "retainedHeapBytes": 9627984,
+      "churnHeapBytes": 18489312,
+      "withinBudget": false
+    },
+    "drag-mesh-4-surfaces": {
+      "title": "Move one unrelated point in a 4-surface scene (36,864 vertices)",
+      "findings": [
+        "P11"
+      ],
+      "budgetMs": 4,
+      "medianMs": 11.0259,
+      "normalizedTime": 0.22543,
+      "retainedHeapBytes": 21776,
+      "churnHeapBytes": 14829752,
+      "withinBudget": false
+    },
+    "snapshot-read-mesh": {
+      "title": "getSnapshot() on a 4-surface scene",
+      "findings": [
+        "P6"
+      ],
+      "budgetMs": 4,
+      "medianMs": 11.6287,
+      "normalizedTime": 0.23775,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 27192768,
       "withinBudget": false
     },
     "delta-roundtrip-500": {
@@ -38,10 +62,10 @@
         "P5"
       ],
       "budgetMs": 0.5,
-      "medianMs": 3.1789,
-      "normalizedTime": 0.06573,
+      "medianMs": 3.4793,
+      "normalizedTime": 0.07113,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 31057888,
+      "churnHeapBytes": 10010768,
       "withinBudget": false
     },
     "snapshot-read-500": {
@@ -50,20 +74,20 @@
         "P6"
       ],
       "budgetMs": 0.5,
-      "medianMs": 0.4766,
-      "normalizedTime": 0.00985,
-      "retainedHeapBytes": 1448,
-      "churnHeapBytes": 9597752,
-      "withinBudget": true
+      "medianMs": 0.5174,
+      "normalizedTime": 0.01058,
+      "retainedHeapBytes": 600,
+      "churnHeapBytes": 9596952,
+      "withinBudget": false
     },
     "export-svg-500": {
       "title": "SVG render of a 500-point 3D scene",
       "findings": [],
       "budgetMs": 16,
-      "medianMs": 1.8797,
-      "normalizedTime": 0.03887,
+      "medianMs": 1.9695,
+      "normalizedTime": 0.04027,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 29754992,
+      "churnHeapBytes": 28238736,
       "withinBudget": true
     },
     "invariants-24": {
@@ -72,10 +96,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 0.245,
-      "normalizedTime": 0.00507,
-      "retainedHeapBytes": 53696,
-      "churnHeapBytes": 10257128,
+      "medianMs": 0.2745,
+      "normalizedTime": 0.00561,
+      "retainedHeapBytes": 57432,
+      "churnHeapBytes": 1954208,
       "withinBudget": true
     }
   },
@@ -90,10 +114,10 @@
         100,
         400
       ],
-      "smallMs": 0.7016,
-      "largeMs": 2.407,
-      "timeExponent": 0.889,
-      "heapExponent": -0.305,
+      "smallMs": 0.7738,
+      "largeMs": 2.5948,
+      "timeExponent": 0.873,
+      "heapExponent": -0.716,
       "meetsTarget": false
     },
     "scale-drag-fanout": {
@@ -107,10 +131,10 @@
         100,
         400
       ],
-      "smallMs": 1.2248,
-      "largeMs": 4.8616,
-      "timeExponent": 0.994,
-      "heapExponent": 0.987,
+      "smallMs": 1.283,
+      "largeMs": 5.333,
+      "timeExponent": 1.028,
+      "heapExponent": 0.982,
       "meetsTarget": true
     },
     "scale-snapshot-heap": {
@@ -123,9 +147,9 @@
         100,
         400
       ],
-      "smallMs": 0.0629,
-      "largeMs": 0.3963,
-      "timeExponent": 1.327,
+      "smallMs": 0.0683,
+      "largeMs": 0.4075,
+      "timeExponent": 1.288,
       "heapExponent": null,
       "meetsTarget": false
     }

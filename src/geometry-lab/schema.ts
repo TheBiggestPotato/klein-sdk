@@ -1378,13 +1378,46 @@ function nonEmptyArray(value: unknown, path: string, context: ValidationContext,
   if (Array.isArray(value) && value.length === 0) issue(context, path, 'Expected at least one item.');
 }
 
+/**
+ * Records that already passed a given validator, cleanly.
+ *
+ * <p>Validation is a pure check - the value comes back untouched and only
+ * issues are collected - so a record object that satisfied a validator once
+ * satisfies it forever, unless it changes, and a changed record is a different
+ * object under the reducer's copy-on-write. Path and issue budget influence
+ * only what a *failing* validation reports, so caching successes alone leaves
+ * every failure reported exactly as before.
+ *
+ * <p>This exists for the same reason as the scan cache in `complexity.ts`: a
+ * single sampled surface holds tens of thousands of vertex objects, and
+ * revalidating all of them to price an edit that moved an unrelated point was
+ * most of that edit.
+ */
+const cleanlyValidatedRecords = new WeakMap<object, Set<ValueValidator>>();
+
 function recordMap(value: unknown, path: string, context: ValidationContext, validator: ValueValidator): void {
   const record = plainRecord(value, path, context);
   if (!record) return;
   for (const [key, item] of Object.entries(record)) {
     if (key.length === 0) issue(context, recordPath(path, key), 'Record keys must be non-empty.');
     const itemPath = recordPath(path, key);
-    validator(item, itemPath, context);
+
+    const cacheable = item !== null && typeof item === 'object';
+    const passed = cacheable ? cleanlyValidatedRecords.get(item as object) : undefined;
+    if (passed?.has(validator)) {
+      // Already known good against this exact validator.
+    } else {
+      const issuesBefore = context.issues.length;
+      validator(item, itemPath, context);
+      if (cacheable && context.issues.length === issuesBefore) {
+        if (passed) passed.add(validator);
+        else cleanlyValidatedRecords.set(item as object, new Set([validator]));
+      }
+    }
+
+    // Deliberately outside the cache: this compares the record against the key
+    // it is filed under, so it depends on where the record sits and not only on
+    // the record itself.
     if (isPlainRecord(item) && typeof item.id === 'string' && item.id !== key) {
       issue(context, childPath(itemPath, 'id'), `Expected record id "${item.id}" to match key "${key}".`);
     }
