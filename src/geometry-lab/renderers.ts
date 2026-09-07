@@ -671,3 +671,246 @@ function clamp(value: number, minimum: number, maximum: number): number {
 function degreesToRadians(degrees: number): number {
   return degrees * Math.PI / 180;
 }
+
+/* -------------------------------------------------------------------------- */
+/* 2D rendering                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A primitive before it has been given its paint order. Distributive, so each
+ * member of the union keeps its own required fields rather than collapsing to
+ * the fields they all share.
+ */
+type UnplacedPrimitive = SvgPrimitive extends infer T
+  ? T extends SvgPrimitive ? Omit<T, 'depth' | 'sequence'> : never
+  : never;
+
+const DEFAULT_POINT_COLOR_2D = '#303841';
+const DEFAULT_STROKE_2D = '#5e6770';
+const DEFAULT_FILL_2D = '#76abae';
+
+/**
+ * Renders the Geometry Lab 2D scene.
+ *
+ * <p>The Lab has always carried a `scene2d` and, since task 2.2, a full API for
+ * building one - but the only renderer was the 3D one, so a 2D figure could be
+ * constructed and could never be looked at or exported. This is that missing
+ * half.
+ *
+ * <p>Deliberately not a camera pipeline. A 2D scene has a pan and a zoom, so
+ * world-to-screen is an offset and a scale, and the painter's problem the 3D
+ * renderer solves - sorting faces by depth - does not exist here. What replaces
+ * it is a fixed paint order: filled regions, then curves, then lines, then
+ * points and labels on top, so that a point is never buried under the polygon
+ * it defines.
+ */
+export function renderGeometryLabSvg2D(
+  snapshot: GeometryLabSnapshot,
+  options: Partial<ExportOptions> = {},
+  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
+): string {
+  const limits = resolveGeometryLabComplexityLimits(complexityLimits);
+  assertGeometryLabSnapshotComplexity(snapshot, limits);
+  assertGeometryLabExportRequestComplexity({ ...options, format: 'svg' }, snapshot, limits);
+
+  const width = renderDimension(options.width, DEFAULT_WIDTH, MIN_WIDTH);
+  const height = renderDimension(options.height, DEFAULT_HEIGHT, MIN_HEIGHT);
+  const background = options.background === 'transparent' ? 'transparent' : options.background ?? '#ffffff';
+  const scene = snapshot.scene.scene2d;
+  const view = snapshot.appState.view2d;
+
+  // y grows upward in the scene and downward in SVG, so the vertical axis is
+  // flipped here rather than at every use.
+  const zoom = Number.isFinite(view.zoom) && view.zoom > 0 ? view.zoom : 1;
+  const toScreen = (point: Vector2): Vector2 => ({
+    x: width / 2 + (point.x - view.x) * zoom,
+    y: height / 2 - (point.y - view.y) * zoom,
+  });
+
+  const primitives: SvgPrimitive[] = [];
+  let sequence = 0;
+  // Layers, painted low to high. Points and labels sit above everything so a
+  // vertex stays visible on top of the polygon it belongs to.
+  const LAYER_FILL = 0;
+  const LAYER_CURVE = 1;
+  const LAYER_LINE = 2;
+  const LAYER_POINT = 3;
+  const push = (primitive: UnplacedPrimitive, layer: number): void => {
+    primitives.push({ ...primitive, depth: -layer, sequence: sequence++ } as SvgPrimitive);
+  };
+
+  const pointsFor = (ids: readonly string[]): Vector2[] | null => {
+    const resolved: Vector2[] = [];
+    for (const id of ids) {
+      const point = scene.points[id];
+      if (!point || point.kind !== 'point2d' || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+      resolved.push(toScreen(point));
+    }
+    return resolved;
+  };
+
+  /**
+   * A line has no endpoints of its own, so it is drawn as the chord where it
+   * crosses the viewport, clipped parametrically against the four edges.
+   *
+   * <p>Clipped rather than merely extended a long way: an unclipped line writes
+   * coordinates far outside the viewBox into the file, which costs export bytes
+   * for pixels no one can see and makes the output awkward to read or diff. A
+   * ray is the same computation with its parameter held at or above zero, so it
+   * starts at its own first point.
+   */
+  const spanAcrossView = (first: Vector2, second: Vector2, fromStart: boolean): Vector2[] | null => {
+    const dx = second.x - first.x;
+    const dy = second.y - first.y;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx, dy) < 1e-9) return null;
+
+    let enter = fromStart ? 0 : -Infinity;
+    let exit = Infinity;
+    // Liang-Barsky: each edge is a half-plane `p * t <= q`. A negative p means
+    // the line enters through that edge and tightens `enter`; a positive p means
+    // it leaves and tightens `exit`. p of zero is parallel to the edge, which is
+    // only survivable if the line already starts on the inside.
+    const clip = (p: number, q: number): boolean => {
+      if (Math.abs(p) < 1e-12) return q >= 0;
+      const t = q / p;
+      if (p < 0) {
+        if (t > enter) enter = t;
+      } else if (t < exit) {
+        exit = t;
+      }
+      return true;
+    };
+    if (!clip(-dx, first.x) || !clip(dx, width - first.x)) return null;
+    if (!clip(-dy, first.y) || !clip(dy, height - first.y)) return null;
+    if (!(enter <= exit) || !Number.isFinite(enter) || !Number.isFinite(exit)) return null;
+
+    return [
+      { x: first.x + dx * enter, y: first.y + dy * enter },
+      { x: first.x + dx * exit, y: first.y + dy * exit },
+    ];
+  };
+
+  for (const entity of valuesByStableId(scene.entities)) {
+    if (entity.hidden) continue;
+    const stroke = entity.strokeColor ?? entity.color ?? DEFAULT_STROKE_2D;
+    const strokeWidth = entity.width ?? 2;
+
+    if (entity.kind === 'polygon') {
+      const points = pointsFor(entity.pointIds);
+      if (!points || points.length < 3) continue;
+      push({
+        kind: 'polygon',
+        points,
+        fill: entity.fillColor ?? entity.color ?? DEFAULT_FILL_2D,
+        fillOpacity: 0.25,
+        stroke,
+        strokeWidth,
+      }, LAYER_FILL);
+      continue;
+    }
+
+    if (entity.kind === 'circle') {
+      const center = scene.points[entity.centerId];
+      if (!center || center.kind !== 'point2d' || !(entity.radius > 0)) continue;
+      const screenCenter = toScreen(center);
+      const radius = entity.radius * zoom;
+      // Sampled rather than emitted as <circle>, so every primitive here is one
+      // of the same four kinds the 3D renderer already knows how to serialize.
+      const steps = 64;
+      const points: Vector2[] = [];
+      for (let index = 0; index <= steps; index += 1) {
+        const angle = (index / steps) * Math.PI * 2;
+        points.push({ x: screenCenter.x + Math.cos(angle) * radius, y: screenCenter.y + Math.sin(angle) * radius });
+      }
+      push({ kind: 'polyline', points, stroke, strokeWidth }, LAYER_CURVE);
+      continue;
+    }
+
+    if (entity.kind === 'conic' || entity.kind === 'parametricCurve' || entity.kind === 'locus') {
+      const points = entity.points
+        .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+        .map(toScreen);
+      if (points.length < 2) continue;
+      push({ kind: 'polyline', points, stroke, strokeWidth }, LAYER_CURVE);
+      continue;
+    }
+
+    if (entity.kind === 'arc') {
+      const center = scene.points[entity.centerId];
+      const start = scene.points[entity.startId];
+      const end = scene.points[entity.endId];
+      if (!center || !start || !end || center.kind !== 'point2d') continue;
+      const radius = Math.hypot(start.x - center.x, start.y - center.y);
+      if (!(radius > 0)) continue;
+      const from = Math.atan2(start.y - center.y, start.x - center.x);
+      let to = Math.atan2(end.y - center.y, end.x - center.x);
+      if (to <= from) to += Math.PI * 2;
+      const steps = 48;
+      const points: Vector2[] = [];
+      for (let index = 0; index <= steps; index += 1) {
+        const angle = from + ((to - from) * index) / steps;
+        points.push(toScreen({ x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius }));
+      }
+      push({ kind: 'polyline', points, stroke, strokeWidth }, LAYER_CURVE);
+      continue;
+    }
+
+    if (entity.kind === 'segment' || entity.kind === 'vector' || entity.kind === 'ray' || entity.kind === 'line') {
+      const points = pointsFor(entity.pointIds);
+      if (!points || points.length < 2) continue;
+      const [first, second] = points as [Vector2, Vector2];
+      if (entity.kind === 'segment' || entity.kind === 'vector') {
+        push({ kind: 'polyline', points: [first, second], stroke, strokeWidth }, LAYER_LINE);
+        continue;
+      }
+      const span = spanAcrossView(first, second, entity.kind === 'ray');
+      if (!span) continue;
+      push({ kind: 'polyline', points: span, stroke, strokeWidth }, LAYER_LINE);
+      continue;
+    }
+
+    if (entity.kind === 'angle') {
+      const points = pointsFor(entity.pointIds);
+      if (!points || points.length < 3) continue;
+      const [armA, vertex, armB] = points as [Vector2, Vector2, Vector2];
+      const radius = entity.radius !== undefined ? entity.radius * zoom : 24;
+      const from = Math.atan2(armA.y - vertex.y, armA.x - vertex.x);
+      const to = Math.atan2(armB.y - vertex.y, armB.x - vertex.x);
+      const steps = 24;
+      const arc: Vector2[] = [];
+      for (let index = 0; index <= steps; index += 1) {
+        const angle = from + (to - from) * (index / steps);
+        arc.push({ x: vertex.x + Math.cos(angle) * radius, y: vertex.y + Math.sin(angle) * radius });
+      }
+      push({ kind: 'polyline', points: arc, stroke, strokeWidth: Math.max(1, strokeWidth - 1) }, LAYER_LINE);
+      continue;
+    }
+  }
+
+  for (const point of valuesByStableId(scene.points)) {
+    if (point.kind !== 'point2d' || point.hidden) continue;
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+    const primitive: Omit<PointPrimitive, 'depth' | 'sequence'> = {
+      kind: 'point',
+      point: toScreen(point),
+      color: point.color ?? DEFAULT_POINT_COLOR_2D,
+    };
+    if (point.label !== undefined) primitive.label = point.label;
+    push(primitive, LAYER_POINT);
+  }
+
+  primitives.sort((first, second) => {
+    const depthOrder = second.depth - first.depth;
+    return depthOrder !== 0 ? depthOrder : first.sequence - second.sequence;
+  });
+
+  const builder = new BoundedSvgOutput(limits.maxExportBytes);
+  builder.append(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Klein 2D geometry scene">`);
+  builder.append(`<rect width="100%" height="100%" fill="${escapeXml(String(background))}"/>`);
+  builder.append(`<g stroke-linecap="round" stroke-linejoin="round" font-family="${KLEIN_UI_FONT_STACK.replace(/"/g, '&quot;')}">`);
+  for (const primitive of primitives) builder.append(renderPrimitive(primitive));
+  builder.append('</g></svg>');
+  const output = builder.toString();
+  assertGeometryLabExportOutputComplexity(output, limits);
+  return output;
+}

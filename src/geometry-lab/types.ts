@@ -188,7 +188,16 @@ export type MeasurementSource3D =
   | { kind: 'pointPlaneDistance'; pointId: string; planeId: string }
   | { kind: 'solidVolume'; solidId: string }
   | { kind: 'solidSurfaceArea'; solidId: string }
-  | { kind: 'solidDihedral'; solidId: string; firstFaceId: string; secondFaceId: string };
+  | { kind: 'solidDihedral'; solidId: string; firstFaceId: string; secondFaceId: string }
+  // The measurements school solid geometry is actually about, and which the
+  // first four leave out: how far apart two points are, how far a point is from
+  // a line, the angle a line makes with another line or with a plane, and the
+  // distance between two lines that never meet.
+  | { kind: 'pointPointDistance'; firstPointId: string; secondPointId: string }
+  | { kind: 'pointLineDistance'; pointId: string; lineEntityId: string }
+  | { kind: 'lineLineAngle'; firstLineId: string; secondLineId: string }
+  | { kind: 'linePlaneAngle'; lineEntityId: string; planeId: string }
+  | { kind: 'lineLineDistance'; firstLineId: string; secondLineId: string };
 
 export interface Measurement3D {
   id: string;
@@ -380,6 +389,11 @@ export interface GeometryLab extends KleinInstrument<GeometryLabSnapshot, Geomet
   addWorkPlanePerpendicularToLine(sourceEntityId: string, through?: string | Vector3, style?: GeometryLabStyleOptions): string;
   pointPlaneDistance(pointId: string, planeId: string): number;
   addPointPlaneDistanceMeasurement(pointId: string, planeId: string, label?: string): string;
+  addDistanceMeasurement3D(firstPointId: string, secondPointId: string, label?: string): string;
+  addPointLineDistanceMeasurement(pointId: string, lineEntityId: string, label?: string): string;
+  addLineAngleMeasurement(firstLineId: string, secondLineId: string, label?: string): string;
+  addLinePlaneAngleMeasurement(lineEntityId: string, planeId: string, label?: string): string;
+  addLineDistanceMeasurement(firstLineId: string, secondLineId: string, label?: string): string;
   addLinePlaneIntersection(lineEntityId: string, planeId: string, style?: GeometryLabStyleOptions): string;
   addPlanePlaneIntersection(firstPlaneId: string, secondPlaneId: string, style?: GeometryLabStyleOptions): string;
   addPrism(base: Vector3[], height?: number | Vector3, style?: SolidCreationOptions): string;

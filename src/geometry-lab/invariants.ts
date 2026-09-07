@@ -404,6 +404,51 @@ function checkMeasurement(
     return;
   }
 
+  const isLineLike = (id: string, field: string): void => {
+    const entity = entities[id];
+    if (!entity || (entity.kind !== 'line' && entity.kind !== 'segment' && entity.kind !== 'ray' && entity.kind !== 'vector')) {
+      addIssue(issues, `${path}.source.${field}`, `Measurement references missing line "${id}".`);
+    }
+  };
+  const requiresKind = (expected: Measurement3D['kind'], description: string): void => {
+    if (measurement.kind !== expected) {
+      addIssue(issues, `${path}.source.kind`, `${description} requires a ${expected} measurement.`);
+    }
+  };
+
+  if (source.kind === 'pointPointDistance') {
+    requireReference(source.firstPointId, pointIds, `${path}.source.firstPointId`, '3D point', issues);
+    requireReference(source.secondPointId, pointIds, `${path}.source.secondPointId`, '3D point', issues);
+    requiresKind('length', 'A point-point distance source');
+    return;
+  }
+  if (source.kind === 'pointLineDistance') {
+    requireReference(source.pointId, pointIds, `${path}.source.pointId`, '3D point', issues);
+    isLineLike(source.lineEntityId, 'lineEntityId');
+    requiresKind('length', 'A point-line distance source');
+    return;
+  }
+  if (source.kind === 'lineLineAngle') {
+    isLineLike(source.firstLineId, 'firstLineId');
+    isLineLike(source.secondLineId, 'secondLineId');
+    requiresKind('angle', 'A line-line angle source');
+    return;
+  }
+  if (source.kind === 'linePlaneAngle') {
+    isLineLike(source.lineEntityId, 'lineEntityId');
+    if (!workPlaneIds.has(source.planeId) && entities[source.planeId]?.kind !== 'plane') {
+      addIssue(issues, `${path}.source.planeId`, `Measurement references missing plane "${source.planeId}".`);
+    }
+    requiresKind('angle', 'A line-plane angle source');
+    return;
+  }
+  if (source.kind === 'lineLineDistance') {
+    isLineLike(source.firstLineId, 'firstLineId');
+    isLineLike(source.secondLineId, 'secondLineId');
+    requiresKind('length', 'A line-line distance source');
+    return;
+  }
+
   const solid = entities[source.solidId];
   if (!solid || solid.kind !== 'solid') {
     addIssue(issues, `${path}.source.solidId`, `Measurement references missing solid "${source.solidId}".`);

@@ -797,6 +797,30 @@ function validateMeasurementSource(value: unknown, path: string, context: Valida
     required(record, 'secondFaceId', path, context, nonEmptyString);
     return;
   }
+  if (record.kind === 'pointPointDistance') {
+    rejectUnknown(record, path, context, ['kind', 'firstPointId', 'secondPointId']);
+    required(record, 'firstPointId', path, context, nonEmptyString);
+    required(record, 'secondPointId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'pointLineDistance') {
+    rejectUnknown(record, path, context, ['kind', 'pointId', 'lineEntityId']);
+    required(record, 'pointId', path, context, nonEmptyString);
+    required(record, 'lineEntityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'lineLineAngle' || record.kind === 'lineLineDistance') {
+    rejectUnknown(record, path, context, ['kind', 'firstLineId', 'secondLineId']);
+    required(record, 'firstLineId', path, context, nonEmptyString);
+    required(record, 'secondLineId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'linePlaneAngle') {
+    rejectUnknown(record, path, context, ['kind', 'lineEntityId', 'planeId']);
+    required(record, 'lineEntityId', path, context, nonEmptyString);
+    required(record, 'planeId', path, context, nonEmptyString);
+    return;
+  }
   issue(context, childPath(path, 'kind'), `Unknown measurement source kind ${quoted(record.kind)}.`);
 }
 

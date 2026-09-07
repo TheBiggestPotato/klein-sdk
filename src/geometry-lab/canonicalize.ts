@@ -1158,6 +1158,87 @@ function canonicalMeasurement(scene: GeometryScene3D, measurement: Measurement3D
     };
   }
 
+  if (source.kind === 'pointPointDistance') {
+    requireMeasurementKind(measurement, 'length');
+    const first = requireMeasurementPoint(scene, source.firstPointId, measurement.id);
+    const second = requireMeasurementPoint(scene, source.secondPointId, measurement.id);
+    return {
+      ...measurement,
+      targetId: source.firstPointId,
+      targetIds: [source.firstPointId, source.secondPointId],
+      value: length3(subtract3(second, first)),
+      unit: 'u',
+    };
+  }
+
+  if (source.kind === 'pointLineDistance') {
+    requireMeasurementKind(measurement, 'length');
+    const point = requireMeasurementPoint(scene, source.pointId, measurement.id);
+    const line = measurementLine(scene, source.lineEntityId, measurement.id);
+    // The rejection of the offset onto the line: |(p - a) x d| / |d|.
+    const offset = subtract3(point, line.point);
+    const cross = cross3(offset, line.direction);
+    return {
+      ...measurement,
+      targetId: source.pointId,
+      targetIds: [source.pointId, source.lineEntityId],
+      value: length3(cross) / length3(line.direction),
+      unit: 'u',
+    };
+  }
+
+  if (source.kind === 'lineLineAngle') {
+    requireMeasurementKind(measurement, 'angle');
+    const first = measurementLine(scene, source.firstLineId, measurement.id);
+    const second = measurementLine(scene, source.secondLineId, measurement.id);
+    return {
+      ...measurement,
+      targetId: source.firstLineId,
+      targetIds: [source.firstLineId, source.secondLineId],
+      // Undirected: a line has no preferred direction, so the answer is the
+      // acute angle between them and never reflex.
+      value: radiansToDegrees(Math.acos(clamp(Math.abs(cosineBetween(first.direction, second.direction)), 0, 1))),
+      unit: 'deg',
+    };
+  }
+
+  if (source.kind === 'linePlaneAngle') {
+    requireMeasurementKind(measurement, 'angle');
+    const line = measurementLine(scene, source.lineEntityId, measurement.id);
+    const plane = planeDataForMeasurement(scene, source.planeId, measurement.id);
+    // Measured from the plane, not from its normal, which is why this is the
+    // complement of the angle the dot product gives directly.
+    const sine = Math.abs(cosineBetween(line.direction, plane.normal));
+    return {
+      ...measurement,
+      targetId: source.lineEntityId,
+      targetIds: [source.lineEntityId, source.planeId],
+      value: radiansToDegrees(Math.asin(clamp(sine, 0, 1))),
+      unit: 'deg',
+    };
+  }
+
+  if (source.kind === 'lineLineDistance') {
+    requireMeasurementKind(measurement, 'length');
+    const first = measurementLine(scene, source.firstLineId, measurement.id);
+    const second = measurementLine(scene, source.secondLineId, measurement.id);
+    const between = subtract3(second.point, first.point);
+    const cross = cross3(first.direction, second.direction);
+    const crossLength = length3(cross);
+    // Parallel lines have no common perpendicular, so the distance is measured
+    // from any point of one to the other line instead.
+    const value = crossLength <= EPSILON
+      ? length3(cross3(between, first.direction)) / length3(first.direction)
+      : Math.abs(dot3(between, cross)) / crossLength;
+    return {
+      ...measurement,
+      targetId: source.firstLineId,
+      targetIds: [source.firstLineId, source.secondLineId],
+      value,
+      unit: 'u',
+    };
+  }
+
   const solid = scene.entities[source.solidId];
   if (!solid || solid.kind !== 'solid') {
     fail('unrecomputable_measurement', measurement.id, `Measurement "${measurement.id}" references missing solid "${source.solidId}".`);
@@ -1190,6 +1271,42 @@ function canonicalMeasurement(scene: GeometryScene3D, measurement: Measurement3D
     value,
     unit: 'deg',
   };
+}
+
+/** Rejects a measurement whose declared kind does not match what its source computes. */
+function requireMeasurementKind(measurement: Measurement3D, expected: Measurement3D['kind']): void {
+  if (measurement.kind !== expected) {
+    fail(
+      'unrecomputable_measurement',
+      measurement.id,
+      `Measurement "${measurement.id}" has an incompatible source kind.`,
+    );
+  }
+}
+
+/** Resolves a line-like entity for a measurement, failing with the measurement's own id. */
+function measurementLine(
+  scene: GeometryScene3D,
+  entityId: string,
+  measurementId: string,
+): { point: GeometryPoint3D; direction: Vector3 } {
+  const entity = scene.entities[entityId];
+  if (!entity || (entity.kind !== 'line' && entity.kind !== 'segment' && entity.kind !== 'ray' && entity.kind !== 'vector')) {
+    fail('unrecomputable_measurement', measurementId, `Measurement "${measurementId}" references invalid line "${entityId}".`);
+  }
+  const first = requireMeasurementPoint(scene, entity.pointIds[0], measurementId);
+  const second = requireMeasurementPoint(scene, entity.pointIds[1], measurementId);
+  const direction = subtract3(second, first);
+  if (length3(direction) <= linearTolerance3D([first, second])) {
+    fail('unrecomputable_measurement', measurementId, `Line "${entityId}" has coincident source points.`);
+  }
+  return { point: first, direction };
+}
+
+/** Cosine of the angle between two vectors, or zero when either is degenerate. */
+function cosineBetween(first: Vector3, second: Vector3): number {
+  const magnitude = length3(first) * length3(second);
+  return magnitude <= EPSILON ? 0 : dot3(first, second) / magnitude;
 }
 
 function planeDataForMeasurement(scene: GeometryScene3D, planeId: string, measurementId: string): PlaneData3D {

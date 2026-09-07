@@ -58,6 +58,7 @@ import type {
   GeometryScene3D,
   GeometrySelection,
   Measurement3D,
+  MeasurementSource3D,
   ParametricCurve3DInput,
   SolidCreationOptions,
   SolidEntity,
@@ -79,7 +80,7 @@ import {
   geometryLabHistoryDelta,
   type GeometryLabHistoryEntry,
 } from './history.js';
-import { renderGeometryLabSvg3D } from './renderers.js';
+import { renderGeometryLabSvg2D, renderGeometryLabSvg3D } from './renderers.js';
 import {
   assertGeometryLabDeltaComplexity,
   assertGeometryLabExportOutputComplexity,
@@ -137,7 +138,7 @@ export {
   validateGeometryLabSnapshot,
 } from './validation.js';
 export { validateGeometryLabCommand } from './commands.js';
-export { renderGeometryLabSvg3D } from './renderers.js';
+export { renderGeometryLabSvg2D, renderGeometryLabSvg3D } from './renderers.js';
 export {
   assertGeometryLabDeltaComplexity,
   assertGeometryLabCommandComplexity,
@@ -672,7 +673,9 @@ class GeometryLabInstrument implements GeometryLab {
       };
     }
     if (options.format === 'svg') {
-      const data = renderGeometryLabSvg3D(this.#snapshot, options, this.#complexityLimits);
+      const data = rendersTwoDimensionalScene(this.#snapshot)
+        ? renderGeometryLabSvg2D(this.#snapshot, options, this.#complexityLimits)
+        : renderGeometryLabSvg3D(this.#snapshot, options, this.#complexityLimits);
       assertGeometryLabExportOutputComplexity(data, this.#complexityLimits);
       return {
         format: 'svg',
@@ -1087,6 +1090,77 @@ class GeometryLabInstrument implements GeometryLab {
     const point = this.#requirePoint3D(pointId);
     const plane = this.#requirePlaneData(planeId);
     return Math.abs(dot3(plane.normal, point) + plane.d);
+  }
+
+  /**
+   * The measurements school solid geometry is actually about, beyond volume and
+   * surface area: how far apart two points are, how far a point is from a line,
+   * the angle a line makes with another line or with a plane, and the distance
+   * between two lines that never meet.
+   *
+   * <p>Each commits the *source* and lets canonicalization compute the value,
+   * exactly as the existing measurements do - which is what keeps them live
+   * when the geometry underneath them moves. The zero seeded here is replaced
+   * before the delta is ever visible.
+   */
+  addDistanceMeasurement3D(firstPointId: string, secondPointId: string, label = 'distance'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'pointPointDistance', firstPointId, secondPointId },
+      'length', 'u', firstPointId, [firstPointId, secondPointId], label,
+    );
+  }
+
+  addPointLineDistanceMeasurement(pointId: string, lineEntityId: string, label = 'point-line distance'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'pointLineDistance', pointId, lineEntityId },
+      'length', 'u', pointId, [pointId, lineEntityId], label,
+    );
+  }
+
+  addLineAngleMeasurement(firstLineId: string, secondLineId: string, label = 'angle'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'lineLineAngle', firstLineId, secondLineId },
+      'angle', 'deg', firstLineId, [firstLineId, secondLineId], label,
+    );
+  }
+
+  addLinePlaneAngleMeasurement(lineEntityId: string, planeId: string, label = 'line-plane angle'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'linePlaneAngle', lineEntityId, planeId },
+      'angle', 'deg', lineEntityId, [lineEntityId, planeId], label,
+    );
+  }
+
+  addLineDistanceMeasurement(firstLineId: string, secondLineId: string, label = 'line distance'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'lineLineDistance', firstLineId, secondLineId },
+      'length', 'u', firstLineId, [firstLineId, secondLineId], label,
+    );
+  }
+
+  #addSourcedMeasurement(
+    source: MeasurementSource3D,
+    kind: Measurement3D['kind'],
+    unit: Measurement3D['unit'],
+    targetId: string,
+    targetIds: string[],
+    label: string,
+  ): string {
+    this.#assertWritable();
+    const measurement: Measurement3D = {
+      id: this.#ids.next('m3'),
+      targetId,
+      targetIds,
+      kind,
+      // Canonicalization fills this in from the source during the commit, and
+      // rejects the delta if the geometry cannot support the measurement.
+      value: 0,
+      label,
+      source,
+    };
+    if (unit !== undefined) measurement.unit = unit;
+    this.#commitDelta({ op: 'addMeasurement', measurement });
+    return measurement.id;
   }
 
   addPointPlaneDistanceMeasurement(pointId: string, planeId: string, label = 'point-plane distance'): string {
@@ -1748,7 +1822,9 @@ class GeometryLabInstrument implements GeometryLab {
 
   #renderSnapshot(snapshot: GeometryLabSnapshot): void {
     if (!this.#root) return;
-    const markup = renderGeometryLabSvg3D(snapshot, { format: 'svg' }, this.#renderComplexityLimits);
+    const markup = rendersTwoDimensionalScene(snapshot)
+      ? renderGeometryLabSvg2D(snapshot, { format: 'svg' }, this.#renderComplexityLimits)
+      : renderGeometryLabSvg3D(snapshot, { format: 'svg' }, this.#renderComplexityLimits);
     this.#root.innerHTML = markup;
   }
 
@@ -2074,6 +2150,22 @@ function intersectPlanes(first: PlaneData3D, second: PlaneData3D): GeometryLine3
 }
 
 /** The 2D counterparts of {@link withEntity3DStyle}, over the shared geometry records. */
+/**
+ * Whether a snapshot should be drawn as a 2D scene.
+ *
+ * <p>`activeView` alone is not the signal it looks like: it defaults to `'2d'`,
+ * so every 3D scene ever built without setting it would suddenly render as an
+ * empty 2D one. The view must therefore be corroborated by the scene actually
+ * holding 2D content, which also keeps the previous behaviour exactly - before
+ * there was a 2D renderer, SVG always meant the 3D scene, and it still does for
+ * every snapshot that has nothing 2D in it.
+ */
+function rendersTwoDimensionalScene(snapshot: GeometryLabSnapshot): boolean {
+  if (snapshot.appState.activeView === '3d') return false;
+  const scene2d = snapshot.scene.scene2d;
+  return Object.keys(scene2d.points).length > 0 || Object.keys(scene2d.entities).length > 0;
+}
+
 function withEntity2DStyle<T extends GeometryEntity>(entity: T, style: GeometryLabStyleOptions): T {
   const next = { ...entity } as T & GeometryLabStyleOptions;
   if (style.label !== undefined) next.label = style.label;
