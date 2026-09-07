@@ -352,6 +352,23 @@ export interface GeometryLab extends KleinInstrument<GeometryLabSnapshot, Geomet
   /** The snapshot without copying it, for callers that only read. See the implementation note. */
   peekSnapshot(): Readonly<GeometryLabSnapshot>;
   importJson(input: string | JsonValue, options?: LoadOptions): void;
+  // 2D construction. The geometry behind these is shared with the Geometry
+  // Calculator through geometry-core, so the two instruments agree on what each
+  // construction means.
+  addPoint2D(point: Vector2 & GeometryLabStyleOptions): string;
+  addSegment2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addRay2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addVector2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addLine2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addPolygon2D(pointIds: string[], style?: GeometryLabStyleOptions): string;
+  addAngle2D(pointIds: [string, string, string], style?: GeometryLabStyleOptions): string;
+  addMidpoint2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addIntersection2D(firstEntityId: string, secondEntityId: string, style?: GeometryLabStyleOptions, index?: number): string;
+  addParallelLine2D(sourceEntityId: string, throughPointId: string, style?: GeometryLabStyleOptions): string;
+  addPerpendicularLine2D(sourceEntityId: string, throughPointId: string, style?: GeometryLabStyleOptions): string;
+  addAngleBisector2D(pointIds: [string, string, string], style?: GeometryLabStyleOptions): string;
+  addCircle2D(centerPointId: string, radiusPointId: string, style?: GeometryLabStyleOptions): string;
+  addCircleThroughPoints2D(pointIds: [string, string, string], style?: GeometryLabStyleOptions): string;
   addPoint3D(point: Vector3 & GeometryLabStyleOptions): string;
   addSegment3D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
   addLine3D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;

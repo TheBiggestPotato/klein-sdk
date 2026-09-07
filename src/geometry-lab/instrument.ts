@@ -11,20 +11,35 @@ import type {
   JsonValue,
   KleinToolRuntime,
   LoadOptions,
+  Vector2,
   Vector3,
 } from '../core/index.js';
 import {
+  buildAngleBisector2D,
+  buildCircleByCenterPoint2D,
+  buildCircleThroughPoints2D,
+  buildConstructedLine2D,
+  buildIntersection2D,
+  buildLineThroughPoints2D,
+  buildMidpoint2D,
   normalizeGeometryPlaneEquation3D,
   planeEquationFrom3DPoints,
 } from '../geometry-core/index.js';
 import type {
+  AngleEntity,
   GeometryConstruction,
+  GeometryConstructionResult,
+  GeometryEntity,
   GeometryLine3D,
   GeometryPlaneEquation3D,
+  GeometryPoint2D,
   GeometryPoint3D,
   LineEntity,
   PlaneEntity,
+  PolygonEntity,
+  RayEntity,
   SegmentEntity,
+  VectorEntity,
 } from '../geometry-core/index.js';
 import type {
   CrossSectionEntity,
@@ -676,6 +691,270 @@ class GeometryLabInstrument implements GeometryLab {
     }
 
     throw new KleinSdkError('unsupported_export', 'Geometry Lab currently supports JSON, SVG, and text exports.');
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 2D construction                                                        */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+   * The Lab declares 2D tools - point, segment, polygon, circle, angle,
+   * midpoint, perpendicular, parallel, bisector - and until now offered no way
+   * to use any of them: every method on the instrument was 3D, so a host had to
+   * hand-assemble raw `addPoint2D` and `addEntity2D` deltas and get the
+   * construction metadata right itself.
+   *
+   * <p>The geometry behind these lives in geometry-core and is shared with the
+   * Geometry Calculator, so the two instruments cannot drift about what a
+   * perpendicular is. What stays here is what is genuinely local: id prefixes,
+   * the Lab's delta shape, and its error codes.
+   */
+  addPoint2D(point: Vector2 & GeometryLabStyleOptions): string {
+    this.#assertWritable();
+    const created: GeometryPoint2D = {
+      id: this.#ids.next('p2'),
+      kind: 'point2d',
+      x: finiteNumber(point.x, 'Point x'),
+      y: finiteNumber(point.y, 'Point y'),
+    };
+    if (point.label !== undefined) created.label = point.label;
+    if (point.color !== undefined) created.color = point.color;
+    if (point.hidden !== undefined) created.hidden = point.hidden;
+    if (point.locked !== undefined) created.locked = point.locked;
+    this.#commitDelta({ op: 'addPoint2D', point: created });
+    return created.id;
+  }
+
+  addSegment2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addLinear2D('segment', 'seg2', firstPointId, secondPointId, style);
+  }
+
+  addRay2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addLinear2D('ray', 'ray2', firstPointId, secondPointId, style);
+  }
+
+  addVector2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addLinear2D('vector', 'vec2', firstPointId, secondPointId, style);
+  }
+
+  addLine2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildLineThroughPoints2D(
+        this.#snapshot.scene.scene2d,
+        this.#require2DPoint(firstPointId),
+        this.#require2DPoint(secondPointId),
+        (prefix: string) => this.#ids.next(prefix),
+      ),
+      style,
+      'invalid_line',
+      'A line needs two distinct 2D points.',
+    );
+  }
+
+  addPolygon2D(pointIds: string[], style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    this.#assertInputCount('Polygon points', pointIds.length, this.#complexityLimits.maxSolidFaceVertices);
+    if (pointIds.length < 3) {
+      throw new KleinSdkError('invalid_polygon', 'A polygon needs at least three 2D points.');
+    }
+    const resolved = pointIds.map(id => this.#require2DPoint(id));
+    if (new Set(resolved).size !== resolved.length) {
+      throw new KleinSdkError('invalid_polygon', 'A polygon cannot repeat a point.');
+    }
+    const entity = withEntity2DStyle<PolygonEntity>({
+      id: this.#ids.next('poly2'),
+      kind: 'polygon',
+      pointIds: resolved,
+    }, style);
+    this.#commitDelta({ op: 'addEntity2D', entity });
+    return entity.id;
+  }
+
+  addAngle2D(pointIds: [string, string, string], style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    const resolved = pointIds.map(id => this.#require2DPoint(id)) as [string, string, string];
+    if (resolved[0] === resolved[1] || resolved[1] === resolved[2]) {
+      throw new KleinSdkError('invalid_angle', 'An angle needs a vertex distinct from both arms.');
+    }
+    const entity = withEntity2DStyle<AngleEntity>({
+      id: this.#ids.next('ang2'),
+      kind: 'angle',
+      pointIds: resolved,
+    }, style);
+    this.#commitDelta({ op: 'addEntity2D', entity });
+    return entity.id;
+  }
+
+  addMidpoint2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildMidpoint2D(
+        this.#snapshot.scene.scene2d,
+        this.#require2DPoint(firstPointId),
+        this.#require2DPoint(secondPointId),
+        (prefix: string) => this.#ids.next(prefix),
+      ),
+      style,
+      'invalid_midpoint',
+      'A midpoint needs two distinct 2D points.',
+    );
+  }
+
+  addIntersection2D(
+    firstEntityId: string,
+    secondEntityId: string,
+    style: GeometryLabStyleOptions = {},
+    index = 0,
+  ): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildIntersection2D(
+        this.#snapshot.scene.scene2d,
+        this.#require2DEntity(firstEntityId),
+        this.#require2DEntity(secondEntityId),
+        (prefix: string) => this.#ids.next(prefix),
+        index,
+      ),
+      style,
+      'invalid_intersection',
+      'Those objects do not meet at that intersection.',
+    );
+  }
+
+  addParallelLine2D(sourceEntityId: string, throughPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addConstructedLine2D('parallelLine', sourceEntityId, throughPointId, style);
+  }
+
+  addPerpendicularLine2D(sourceEntityId: string, throughPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addConstructedLine2D('perpendicularLine', sourceEntityId, throughPointId, style);
+  }
+
+  addAngleBisector2D(pointIds: [string, string, string], style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    const resolved = pointIds.map(id => this.#require2DPoint(id)) as [string, string, string];
+    return this.#commit2DConstruction(
+      buildAngleBisector2D(this.#snapshot.scene.scene2d, resolved, (prefix: string) => this.#ids.next(prefix)),
+      style,
+      'invalid_bisector',
+      'That angle has no bisector.',
+    );
+  }
+
+  addCircle2D(centerPointId: string, radiusPointId: string, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildCircleByCenterPoint2D(
+        this.#snapshot.scene.scene2d,
+        this.#require2DPoint(centerPointId),
+        this.#require2DPoint(radiusPointId),
+        (prefix: string) => this.#ids.next(prefix),
+      ),
+      style,
+      'invalid_circle',
+      'A circle needs a centre and a distinct point on it.',
+    );
+  }
+
+  addCircleThroughPoints2D(pointIds: [string, string, string], style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    const resolved = pointIds.map(id => this.#require2DPoint(id)) as [string, string, string];
+    return this.#commit2DConstruction(
+      buildCircleThroughPoints2D(this.#snapshot.scene.scene2d, resolved, (prefix: string) => this.#ids.next(prefix)),
+      style,
+      'invalid_circle',
+      'Three collinear points do not define a circle.',
+    );
+  }
+
+  #addLinear2D(
+    kind: 'segment' | 'ray' | 'vector',
+    prefix: string,
+    firstPointId: string,
+    secondPointId: string,
+    style: GeometryLabStyleOptions,
+  ): string {
+    this.#assertWritable();
+    const first = this.#require2DPoint(firstPointId);
+    const second = this.#require2DPoint(secondPointId);
+    if (first === second) {
+      throw new KleinSdkError('invalid_segment', `A ${kind} needs two distinct 2D points.`);
+    }
+    const entity = withEntity2DStyle<SegmentEntity | RayEntity | VectorEntity>({
+      id: this.#ids.next(prefix),
+      kind,
+      pointIds: [first, second],
+    } as SegmentEntity | RayEntity | VectorEntity, style);
+    this.#commitDelta({ op: 'addEntity2D', entity });
+    return entity.id;
+  }
+
+  #addConstructedLine2D(
+    kind: 'parallelLine' | 'perpendicularLine',
+    sourceEntityId: string,
+    throughPointId: string,
+    style: GeometryLabStyleOptions,
+  ): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildConstructedLine2D(
+        this.#snapshot.scene.scene2d,
+        kind,
+        this.#require2DEntity(sourceEntityId),
+        this.#require2DPoint(throughPointId),
+        (prefix: string) => this.#ids.next(prefix),
+      ),
+      style,
+      kind === 'parallelLine' ? 'invalid_parallel' : 'invalid_perpendicular',
+      'That source has no direction to build from.',
+    );
+  }
+
+  /**
+   * Commits a shared builder's records as one atomic Lab delta.
+   *
+   * <p>Style is applied only to the primary object: helper points are hidden
+   * scaffolding that hold a constructed line's direction, and colouring or
+   * labelling them would put furniture in the object list that no one asked
+   * for.
+   */
+  #commit2DConstruction(
+    result: GeometryConstructionResult | null,
+    style: GeometryLabStyleOptions,
+    failureCode: string,
+    failureMessage: string,
+  ): string {
+    if (!result) throw new KleinSdkError(failureCode, failureMessage);
+    const deltas: GeometryLabDelta[] = [
+      ...result.points.map(point => ({ op: 'addPoint2D' as const, point })),
+      ...result.entities.map(entity => ({
+        op: 'addEntity2D' as const,
+        entity: entity.id === result.primaryId ? withEntity2DStyle(entity, style) : entity,
+      })),
+    ];
+    // A construction whose primary object is a point still carries style.
+    const styled = deltas.map(delta => (
+      delta.op === 'addPoint2D' && delta.point.id === result.primaryId
+        ? { ...delta, point: withPoint2DStyle(delta.point, style) }
+        : delta
+    ));
+    this.#commitDelta({ op: 'batch', deltas: styled });
+    return result.primaryId;
+  }
+
+  #require2DPoint(id: string): string {
+    const point = this.#snapshot.scene.scene2d.points[id];
+    if (!point || point.kind !== 'point2d') {
+      throw new KleinSdkError('invalid_point_reference', `2D point "${id}" does not exist.`);
+    }
+    return id;
+  }
+
+  #require2DEntity(id: string): string {
+    if (!this.#snapshot.scene.scene2d.entities[id]) {
+      throw new KleinSdkError('invalid_entity_reference', `2D entity "${id}" does not exist.`);
+    }
+    return id;
   }
 
   addPoint3D(point: Vector3 & GeometryLabStyleOptions): string {
@@ -1792,6 +2071,25 @@ function intersectPlanes(first: PlaneData3D, second: PlaneData3D): GeometryLine3
   return intersection.kind === 'line'
     ? { point: { ...intersection.point }, direction: { ...intersection.direction } }
     : null;
+}
+
+/** The 2D counterparts of {@link withEntity3DStyle}, over the shared geometry records. */
+function withEntity2DStyle<T extends GeometryEntity>(entity: T, style: GeometryLabStyleOptions): T {
+  const next = { ...entity } as T & GeometryLabStyleOptions;
+  if (style.label !== undefined) next.label = style.label;
+  if (style.color !== undefined) next.color = style.color;
+  if (style.hidden !== undefined) next.hidden = style.hidden;
+  if (style.locked !== undefined) next.locked = style.locked;
+  return next as T;
+}
+
+function withPoint2DStyle(point: GeometryPoint2D, style: GeometryLabStyleOptions): GeometryPoint2D {
+  const next = { ...point };
+  if (style.label !== undefined) next.label = style.label;
+  if (style.color !== undefined) next.color = style.color;
+  if (style.hidden !== undefined) next.hidden = style.hidden;
+  if (style.locked !== undefined) next.locked = style.locked;
+  return next;
 }
 
 function withEntity3DStyle<T extends GeometryEntity3D>(entity: T, style: GeometryLabStyleOptions): T {

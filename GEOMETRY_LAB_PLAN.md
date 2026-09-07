@@ -14,7 +14,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | --- | --: | --: | --- |
 | 0 - Performance foundation | 9 | 11 | All landed except 0.3 (declined on measurement) and 0.7 (blocked by the JSON contract) |
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
-| 2 - Close the 2D gap | 0 | 5 | |
+| 2 - Close the 2D gap | 1 | 5 | 2.2 landed on shared builders; 2.1 half done; 2.3-2.5 open |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
 | 4 - The learning layer | 0 | 6 | 4.1 can start any time |
 | 5 - Accessibility and output | 0 | 5 | |
@@ -59,12 +59,15 @@ reading. 3D midpoints always did recompute, so the gap was narrower than stated.
 And cross-sections were never baked either - they recut on every commit, and
 what blocked them was an identity rule, not staleness.
 
-**The Lab has no 2D API.** The `GeometryLab` interface (`types.ts:340`) exposes
-roughly forty-five methods and every one is 3D, while `GeometryLabTool` declares
-`point`, `segment`, `polygon`, `circle`, `angle`, `midpoint`, `perpendicular`,
-`parallel` and `bisector`. A host can only hand-build raw `addPoint2D` and
-`addEntity2D` deltas. The construction API those tools need already exists next
-door in `GeometryCalculator` (`src/geometry/index.ts`).
+**The Lab has no 2D API.** Every method on the instrument was 3D, while
+`GeometryLabTool` declared `point`, `segment`, `polygon`, `circle`, `angle`,
+`midpoint`, `perpendicular`, `parallel` and `bisector`. A host could only
+hand-build raw deltas - and had to write the `construction` metadata itself, or
+the result would not follow its sources.
+
+**Fixed by task 2.2**, on shared builders in geometry-core so the Lab and the
+Calculator cannot drift about what a construction means. The 2D *renderer* is
+still 3D-only (task 2.3), and 2D measurements do not exist yet (task 2.4).
 
 **The learning layer is one good idea, wired to nothing.**
 `computeGeometryInvariants` (`gradable-invariants.ts:80`) is well designed:
@@ -649,14 +652,48 @@ value is ever displayed as if it were live.
 
 ## Phase 2 - close the 2D gap
 
-- [ ] **2.1 Share, do not duplicate.** The Lab's `scene2d` is already a
-  `GeometryScene`. Extract the construction operations in `src/geometry` into
-  pure functions over `GeometryScene` in `geometry-core`, and have both the
-  Calculator and the Lab call them. Avoids a second implementation and a second
-  set of bugs. This is a refactor with no behaviour change and should land
-  behind the existing Calculator tests.
-- [ ] **2.2 Semantic 2D deltas and Lab methods** for every tool
-  `GeometryLabTool` already declares.
+- [~] **2.1 Share, do not duplicate.** *Half done, and the half that was
+  missing turned out to be smaller than the task assumed.*
+
+  The task read as though the Calculator held the 2D construction mathematics
+  and the Lab needed a copy. It does not: `midpoint2D`,
+  `geometryCircleTangentPoint2D`, `geometryCircumcircle2D`,
+  `lineEquationFrom2DPoints` and the rest already live in geometry-core and are
+  already shared. What the Calculator's methods add around them is id
+  generation, theme colours, selection, its own delta shape and its own error
+  codes - all genuinely local.
+
+  What *was* duplicable is the step in between: turning a construction into the
+  records it adds, including the hidden helper point that gives a constructed
+  line its direction and the `construction` metadata that makes the result
+  follow its sources. That is now a set of pure builders in geometry-core -
+  `buildMidpoint2D`, `buildIntersection2D`, `buildConstructedLine2D`,
+  `buildAngleBisector2D`, `buildCircleByCenterPoint2D`,
+  `buildCircleThroughPoints2D`, `buildLineThroughPoints2D` - which take a scene
+  and an id allocator and return records for the caller to commit however it
+  commits things.
+
+  The Lab uses them. **Migrating the Calculator onto them is still open**: it is
+  a behaviour-preserving refactor inside a 9,000-line file with a large test
+  surface, and it deserves its own change and its own differential run rather
+  than riding along with a feature.
+- [x] **2.2 Lab 2D methods** for every tool `GeometryLabTool` declares:
+  `addPoint2D`, `addSegment2D`, `addRay2D`, `addVector2D`, `addLine2D`,
+  `addPolygon2D`, `addAngle2D`, `addMidpoint2D`, `addIntersection2D`,
+  `addParallelLine2D`, `addPerpendicularLine2D`, `addAngleBisector2D`,
+  `addCircle2D`, `addCircleThroughPoints2D`.
+
+  Every one of them produces **live** geometry, which is the part that was
+  really missing: a host could always push a raw `addPoint2D` delta, but only by
+  writing the `construction` metadata itself, and without that the point sits
+  where it was put instead of following its sources. Drag B and the midpoint of
+  AB moves; turn AB and its perpendicular turns; the foot of a perpendicular
+  slides with the point it is dropped from; a perpendicular bisector settles
+  behind its own midpoint in one commit.
+
+  Helper points stay hidden and deliberately do **not** take the caller's style,
+  so a labelled construction does not put scaffolding in the object list. A
+  construction that cannot be built throws and leaves nothing behind.
 - [ ] **2.3 2D renderer.** `renderGeometryLabSvg3D` (`renderers.ts:101`) reads
   only `scene3d`; the 2D scene is never rendered or exported. Add the 2D
   renderer and include both in export, respecting `maxExportPrimitives`.

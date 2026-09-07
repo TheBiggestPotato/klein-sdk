@@ -401,6 +401,243 @@ export function geometryConstructionSourceIds(construction: GeometryConstruction
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Shared 2D construction builders                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The records a construction adds to a scene, before any instrument has decided
+ * how to commit them.
+ *
+ * <p>The two instruments that build 2D geometry disagree about almost
+ * everything around a construction - id prefixes, theme colours, whether the
+ * result gets selected, and the shape of the delta that carries it - but they
+ * agree completely about what a perpendicular *is*. These builders are that
+ * agreement, and nothing else: given a scene and an id source, they return the
+ * records, and the caller commits them however it commits things.
+ *
+ * <p>Some constructions need a hidden helper point to pin down a line's
+ * direction, which is why this returns points as well as entities even for
+ * operations that look like they only add an entity.
+ */
+export interface GeometryConstructionResult {
+  points: GeometryPoint2D[];
+  entities: GeometryEntity[];
+  /** The object the caller should treat as the result - the last thing created. */
+  primaryId: string;
+}
+
+/** Supplies ids for newly built records. Instruments pass their own generator. */
+export type GeometryIdAllocator = (prefix: string) => string;
+
+function point2D(id: string, position: Vector2, extra: Partial<GeometryPoint2D> = {}): GeometryPoint2D {
+  return { id, kind: 'point2d', x: position.x, y: position.y, ...extra };
+}
+
+/** Midpoint of two existing points, linked so it follows them. */
+export function buildMidpoint2D(
+  scene: GeometryScene,
+  firstPointId: string,
+  secondPointId: string,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const first = scene.points[firstPointId];
+  const second = scene.points[secondPointId];
+  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return null;
+  if (firstPointId === secondPointId) return null;
+
+  const id = allocate('p');
+  const created = point2D(id, midpoint2D(first, second), {
+    locked: true,
+    construction: { kind: 'midpoint', sourceIds: [firstPointId, secondPointId] },
+  });
+  return { points: [created], entities: [], primaryId: id };
+}
+
+/** Intersection of two entities, at `index` when they meet more than once. */
+export function buildIntersection2D(
+  scene: GeometryScene,
+  firstEntityId: string,
+  secondEntityId: string,
+  allocate: GeometryIdAllocator,
+  index = 0,
+): GeometryConstructionResult | null {
+  const position = geometryIntersectionPoint2D(scene, firstEntityId, secondEntityId, index);
+  if (!position) return null;
+
+  const id = allocate('p');
+  const created = point2D(id, position, {
+    locked: true,
+    construction: { kind: 'intersection', sourceIds: [firstEntityId, secondEntityId], index },
+  });
+  return { points: [created], entities: [], primaryId: id };
+}
+
+/**
+ * A line through a point, parallel or perpendicular to an existing line-like
+ * entity. The hidden helper point is what gives the line its second defining
+ * point; recomputation moves it as the source turns.
+ */
+export function buildConstructedLine2D(
+  scene: GeometryScene,
+  kind: 'parallelLine' | 'perpendicularLine',
+  sourceEntityId: string,
+  throughPointId: string,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const through = scene.points[throughPointId];
+  const source = scene.entities[sourceEntityId];
+  if (!isGeometryPoint2D(through) || !source) return null;
+
+  const sourceEquation = geometryLineLikeEquation2D(scene, sourceEntityId);
+  if (!sourceEquation) return null;
+
+  const equation = kind === 'parallelLine'
+    ? normalizeGeometryLineEquation({
+      a: sourceEquation.a,
+      b: sourceEquation.b,
+      c: -(sourceEquation.a * through.x + sourceEquation.b * through.y),
+    })
+    : normalizeGeometryLineEquation({
+      a: -sourceEquation.b,
+      b: sourceEquation.a,
+      c: -((-sourceEquation.b) * through.x + sourceEquation.a * through.y),
+    });
+  if (!equation) return null;
+
+  const direction = normalizeVector2D({ x: equation.b, y: -equation.a }) ?? { x: 1, y: 0 };
+  const helperId = allocate('p');
+  const helper = point2D(helperId, { x: through.x + direction.x, y: through.y + direction.y }, {
+    hidden: true,
+    locked: true,
+  });
+  const lineId = allocate('line');
+  const line: LineEntity = {
+    id: lineId,
+    kind: 'line',
+    pointIds: [throughPointId, helperId],
+    equation,
+    construction: { kind, sourceLineId: sourceEntityId, throughPointId },
+  };
+  return { points: [helper], entities: [line], primaryId: lineId };
+}
+
+/** The bisector of the angle at `pointIds[1]`, as a line from the vertex. */
+export function buildAngleBisector2D(
+  scene: GeometryScene,
+  pointIds: [string, string, string],
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const vertex = scene.points[pointIds[1]];
+  if (!isGeometryPoint2D(vertex)) return null;
+
+  const helperPosition = geometryAngleBisectorPoint2D(scene, pointIds);
+  if (!helperPosition) return null;
+  const equation = lineEquationFrom2DPoints(vertex, helperPosition);
+  if (!equation) return null;
+
+  const helperId = allocate('p');
+  const helper = point2D(helperId, helperPosition, { hidden: true, locked: true });
+  const lineId = allocate('line');
+  const line: LineEntity = {
+    id: lineId,
+    kind: 'line',
+    pointIds: [pointIds[1], helperId],
+    equation,
+    construction: { kind: 'angleBisector', pointIds },
+  };
+  return { points: [helper], entities: [line], primaryId: lineId };
+}
+
+/** A circle centred on one point and passing through another. */
+export function buildCircleByCenterPoint2D(
+  scene: GeometryScene,
+  centerPointId: string,
+  radiusPointId: string,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const center = scene.points[centerPointId];
+  const radiusPoint = scene.points[radiusPointId];
+  if (!isGeometryPoint2D(center) || !isGeometryPoint2D(radiusPoint)) return null;
+
+  const radius = distance2D(center, radiusPoint);
+  if (!Number.isFinite(radius) || radius <= 0) return null;
+
+  const id = allocate('circle');
+  const circle: CircleEntity = {
+    id,
+    kind: 'circle',
+    centerId: centerPointId,
+    radius,
+    construction: { kind: 'circleCenterPoint', centerPointId, radiusPointId },
+  };
+  return { points: [], entities: [circle], primaryId: id };
+}
+
+/** The circle through three points, with its centre as a hidden owned point. */
+export function buildCircleThroughPoints2D(
+  scene: GeometryScene,
+  pointIds: [string, string, string],
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const circle = geometryCircumcircle2D(scene, pointIds);
+  if (!circle) return null;
+
+  const centerId = allocate('p');
+  const center = point2D(centerId, circle.center, { hidden: true, locked: true });
+  const id = allocate('circle');
+  const entity: CircleEntity = {
+    id,
+    kind: 'circle',
+    centerId,
+    radius: circle.radius,
+    construction: { kind: 'circleThroughPoints', pointIds },
+  };
+  return { points: [center], entities: [entity], primaryId: id };
+}
+
+/** An infinite line through two existing points. */
+export function buildLineThroughPoints2D(
+  scene: GeometryScene,
+  firstPointId: string,
+  secondPointId: string,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const first = scene.points[firstPointId];
+  const second = scene.points[secondPointId];
+  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return null;
+
+  const equation = lineEquationFrom2DPoints(first, second);
+  if (!equation) return null;
+
+  const id = allocate('line');
+  const line: LineEntity = {
+    id,
+    kind: 'line',
+    pointIds: [firstPointId, secondPointId],
+    equation,
+    construction: { kind: 'lineThroughPoints', sourceIds: [firstPointId, secondPointId] },
+  };
+  return { points: [], entities: [line], primaryId: id };
+}
+
+/** Equation of any line-like 2D entity, or null when it has none. */
+export function geometryLineLikeEquation2D(
+  scene: GeometryScene,
+  entityId: string,
+): GeometryLineEquation | null {
+  const entity = scene.entities[entityId];
+  if (!entity) return null;
+  if (entity.kind === 'line' && entity.equation) return normalizeGeometryLineEquation(entity.equation);
+  if (entity.kind !== 'line' && entity.kind !== 'segment' && entity.kind !== 'ray' && entity.kind !== 'vector') {
+    return null;
+  }
+  const first = scene.points[entity.pointIds[0]];
+  const second = scene.points[entity.pointIds[1]];
+  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return null;
+  return lineEquationFrom2DPoints(first, second);
+}
+
 /** Direct source ids for any point/entity in the scene. */
 export function geometryObjectDependencies(scene: GeometryScene, objectId: string): string[] {
   const point = scene.points[objectId];
