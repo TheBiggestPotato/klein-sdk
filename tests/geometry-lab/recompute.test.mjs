@@ -167,6 +167,44 @@ test('a derived point with a missing source is left alone', () => {
   assert.equal(result.points.M.x, 0, 'an unresolvable construction must not invent a position');
 });
 
+/* -------------------------------------------------------------------------- */
+/* Complexity bounds still hold on the owned fast path (task 0.5)             */
+/* -------------------------------------------------------------------------- */
+
+test('a scene cannot grow past its cap one bounded delta at a time', () => {
+  // The owned path skips the pre-canonicalization complexity assertion, on the
+  // argument that a bounded snapshot plus a bounded delta stays within a
+  // constant factor. The post-assertion is what actually holds the limit, so
+  // this is the test that the trade did not open a hole: every delta below is
+  // individually tiny, and the cap must still stop the scene at ten points.
+  const lab = createGeometryLab({ complexityLimits: { maxPointRecords: 10 } });
+  let added = 0;
+  let code = null;
+  try {
+    for (let index = 0; index < 50; index += 1) {
+      lab.addPoint3D({ x: index, y: 0, z: 0 });
+      added += 1;
+    }
+  } catch (error) {
+    code = error.code;
+  }
+  assert.equal(added, 10, 'the cap must stop growth exactly at the limit');
+  assert.equal(code, 'geometry_lab_snapshot_too_complex');
+});
+
+test('a snapshot already over its cap is still rejected on load', () => {
+  const source = createGeometryLab();
+  for (let index = 0; index < 20; index += 1) source.addPoint3D({ x: index, y: 0, z: 0 });
+  const oversized = source.getSnapshot();
+
+  const strict = createGeometryLab({ complexityLimits: { maxPointRecords: 10 } });
+  assert.throws(
+    () => strict.loadSnapshot(oversized),
+    error => error.code === 'geometry_lab_snapshot_too_complex',
+    'an untrusted snapshot arriving from outside is still fully checked',
+  );
+});
+
 test('recomputeGeometryDependents touches only what depends on the change', () => {
   const input = scene({
     A: point('A', 0, 0),

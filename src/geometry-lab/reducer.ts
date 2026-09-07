@@ -205,9 +205,14 @@ export function reduceOwnedGeometryLabDelta(
     reducedValidation.value,
     'invalid_delta_result',
     'Geometry Lab delta produced geometry that could not be canonically recomputed.',
-    limits,
-    true,
-    rebuildEquationIds,
+    {
+      complexityLimits: limits,
+      reuseSurfaceMeshCaches: true,
+      equationEntityIds: rebuildEquationIds,
+      // The caller owns this snapshot: it was bounded before the delta, and the
+      // delta itself was bounded above.
+      inputAlreadyBounded: true,
+    },
   );
   const invariantIssues = getGeometryLabInvariantIssues(next);
   if (invariantIssues.length > 0) {
@@ -500,16 +505,37 @@ function applyGeometryLabDeltaUnchecked(
   }
 }
 
+interface GeometryLabBoundaryOptions {
+  complexityLimits?: Partial<GeometryLabComplexityLimits>;
+  reuseSurfaceMeshCaches?: boolean;
+  equationEntityIds?: ReadonlySet<string>;
+  /**
+   * Set when the input is known to be a bounded snapshot plus a bounded delta,
+   * which is the case on the instrument's owned path: the previous snapshot
+   * passed this same assertion, and the delta passed
+   * `assertGeometryLabDeltaComplexity`. The result is then within a constant
+   * factor of the limit, so canonicalization cannot run away before the
+   * post-assertion below enforces the real bound. Skipping the pre-assertion
+   * saves a full traversal of the whole snapshot on every single edit.
+   *
+   * <p>The post-assertion is never skipped. It is the boundary that actually
+   * holds the limit, and dropping it would let a scene grow past the cap one
+   * bounded delta at a time.
+   */
+  inputAlreadyBounded?: boolean;
+}
+
 function canonicalizeGeometryLabBoundary(
   snapshot: GeometryLabSnapshot,
   code: 'invalid_snapshot' | 'invalid_initial_snapshot' | 'invalid_delta_result',
   message: string,
-  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
-  reuseSurfaceMeshCaches = false,
-  equationEntityIds?: ReadonlySet<string>,
+  options: GeometryLabBoundaryOptions = {},
 ): GeometryLabSnapshot {
+  const { complexityLimits = {}, reuseSurfaceMeshCaches = false, equationEntityIds } = options;
   try {
-    assertGeometryLabSnapshotComplexity(snapshot, complexityLimits);
+    if (!options.inputAlreadyBounded) {
+      assertGeometryLabSnapshotComplexity(snapshot, complexityLimits);
+    }
     const canonical = canonicalizeEquationSurfaceCaches(
       canonicalizeGeometryLabSnapshotBase(snapshot, { reuseSurfaceMeshCaches }),
       equationEntityIds,

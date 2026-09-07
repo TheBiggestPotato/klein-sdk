@@ -12,7 +12,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 
 | Phase | Done | Tasks | Notes |
 | --- | --: | --: | --- |
-| 0 - Performance foundation | 2 | 8 | 0.1 measured the phase; 0.4 removed the quadratic |
+| 0 - Performance foundation | 3 | 9 | 0.1 measured, 0.4 removed the quadratic, 0.5 trimmed the delta path; 0.9 added from the profile |
 | 1 - Make 3D dynamic | 0 | 6 | Blocked on 0.2-0.4 |
 | 2 - Close the 2D gap | 0 | 5 | |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
@@ -28,16 +28,17 @@ Run `npm run bench:geometry-lab` for the current numbers, or
 1. [Verdict](#1-verdict)
 2. [Performance baseline](#2-performance-baseline)
 3. [Measured baseline](#2a-measured-baseline)
-4. [Budgets](#3-budgets)
-5. [Phase 0 - performance foundation](#phase-0---performance-foundation)
-6. [Phase 1 - make 3D dynamic](#phase-1---make-3d-dynamic)
-7. [Phase 2 - close the 2D gap](#phase-2---close-the-2d-gap)
-8. [Phase 3 - transformations and constraints](#phase-3---transformations-and-constraints)
-9. [Phase 4 - the learning layer](#phase-4---the-learning-layer)
-10. [Phase 5 - accessibility and output](#phase-5---accessibility-and-output)
-11. [Phase 6 - mathematical depth](#phase-6---mathematical-depth)
-12. [New complexity limits](#11-new-complexity-limits)
-13. [Sequencing and risk](#12-sequencing-and-risk)
+4. [Per-delta profile](#2b-per-delta-profile)
+5. [Budgets](#3-budgets)
+6. [Phase 0 - performance foundation](#phase-0---performance-foundation)
+7. [Phase 1 - make 3D dynamic](#phase-1---make-3d-dynamic)
+8. [Phase 2 - close the 2D gap](#phase-2---close-the-2d-gap)
+9. [Phase 3 - transformations and constraints](#phase-3---transformations-and-constraints)
+10. [Phase 4 - the learning layer](#phase-4---the-learning-layer)
+11. [Phase 5 - accessibility and output](#phase-5---accessibility-and-output)
+12. [Phase 6 - mathematical depth](#phase-6---mathematical-depth)
+13. [New complexity limits](#11-new-complexity-limits)
+14. [Sequencing and risk](#12-sequencing-and-risk)
 
 ## 1. Verdict
 
@@ -106,9 +107,13 @@ JavaScript array, so the traversal is O(n²).
 ### P5. Repeated full-snapshot complexity traversals
 
 `assertGeometryLabSnapshotComplexity` walks up to `maxTraversalNodes`
-(2,000,000). It runs twice inside `canonicalizeGeometryLabBoundary`
-(`reducer.ts:512` and `:516`), and a third time on the public path at
-`reducer.ts:141`. Three full traversals per delta.
+(2,000,000). It ran twice inside `canonicalizeGeometryLabBoundary` and a third
+time on the public path at `reducer.ts:141`.
+
+**Understated as written.** Profiling for task 0.5 found five full passes per
+delta, not three, and the complexity assertion is not the largest of them - the
+cross-record integrity scan is. See [Section 2b](#2b-per-delta-profile). Task
+0.5 removed one assertion from the owned path; task 0.9 covers the rest.
 
 ### P6. Deep clone on every snapshot read
 
@@ -191,6 +196,31 @@ What the numbers settle:
 Churn is reported but never gated: it is measured without collecting, so a GC
 firing mid-loop reads low. It can produce a false pass, never a false failure.
 
+## 2b. Per-delta profile
+
+Measured on a 500-point 3D scene while implementing task 0.5, because the task
+was scoped from a budget miss rather than from a profile. Stages inside
+`reduceOwnedGeometryLabDelta`, which totalled 2.55 ms of a 3.12 ms
+`applyDelta`:
+
+| Stage | Cost | Share | Notes |
+| --- | --: | --: | --- |
+| `getGeometryLabInvariantIssues` | 0.98 ms | 38% | Full cross-record integrity scan |
+| `assertSnapshotComplexity` x2 | 0.77 ms | 30% | One removed by task 0.5 |
+| `validateGeometryLabSnapshotStrict` | 0.32 ms | 12% | Full shape validation |
+| `canonicalizeGeometryLabSnapshot` | 0.32 ms | 12% | Includes the 2D recompute |
+| `diffGeometryLabHistory` | 0.06 ms | 2% | |
+
+Every one of these is a full pass over the whole snapshot, run on every edit, to
+check things that only changed locally. That is finding P5, and it is larger
+than P5 was written to be: not three traversals but five, and the most expensive
+is the integrity scan rather than the complexity assertion task 0.5 removed.
+
+The consequence for the plan is task 0.9 below. The integrity scan is a safety
+check, so making it incremental is not a free win - it is the difference between
+catching a dangling reference and shipping one - which is why it is scoped as
+its own task with its own equivalence testing rather than folded into 0.5.
+
 ## 3. Budgets
 
 Adopted targets. Phase 0.1 turns them into asserted gates.
@@ -239,13 +269,20 @@ feature. Nothing here is user-visible.
   quadratic is gone. Chain-drag allocation halved, 1.40 → 0.71 MB per drag.
   Verified byte-identical against the previous build across every construction
   kind, six drags and two degenerate configurations.
-- [ ] **0.5 Trust the owned path.** In `reduceOwnedGeometryLabDelta` the input
-  snapshot is already canonical and already validated. Drop the pre-canonical
-  full traversal and assert incrementally against the delta instead, keeping one
-  post-canonical assert as the boundary (P5). **Promoted after measurement:**
-  `delta-roundtrip-500` costs 5.53 ms against a 0.5 ms budget for adding a
-  single point, so this is not the tidying it looked like when the phase was
-  written - it is one of the two largest wins in Phase 0.
+- [x] **0.5 Trust the owned path.** The owned path now skips the
+  pre-canonicalization complexity traversal: its input is a bounded snapshot
+  plus a bounded delta, so the result is within a constant factor of the limit
+  and the post-canonicalization assertion still holds the real bound (P5).
+  **Result:** `delta-roundtrip-500` 5.48 ms → 4.57 ms, 17%. Tests cover the
+  property traded against - a scene still cannot grow past its cap one bounded
+  delta at a time, and an untrusted snapshot arriving from outside is still
+  fully checked on load.
+
+  **Correction.** When 2a was written this was called one of the two largest
+  wins in the phase, reasoning from the 11x budget miss rather than from a
+  profile. Profiling the path shows the assertion was never the bulk of it -
+  see [Section 2b](#2b-per-delta-profile). It is a real 17%, not a
+  transformation, and the delta path is still 9x over budget.
 - [ ] **0.6 Structural-sharing reads.** The reducer is already copy-on-write, so
   `getSnapshot()` can return a frozen reference instead of a deep clone (P6).
   Keep the cloning variant available as `getSnapshotCopy()` for hosts that
@@ -257,6 +294,19 @@ feature. Nothing here is user-visible.
 - [ ] **0.8 History budget.** Lower `maxHistoryEntryBytes` and `maxHistoryBytes`
   toward the Section 3 targets, and store patches structurally rather than as
   serialized JSON where the diff is small (P7).
+- [ ] **0.9 Incremental integrity and shape checking.** *Added after the task
+  0.5 profile.* `getGeometryLabInvariantIssues` and
+  `validateGeometryLabSnapshotStrict` rescan the entire snapshot on every edit;
+  together they are half the cost of a delta. The id sets and duplicate-id
+  detection are inherently O(N) but cheap; the expensive part is the per-record
+  reference checking, which for an add or an update only needs to cover the
+  records the delta touched. A **delete still needs a full pass**, because
+  removing an id can dangle a reference from a record the delta never touched -
+  unless the reverse-dependency graph from task 0.2 is used to find exactly
+  those. These are safety checks: scope this with the same
+  differential-equivalence testing used for task 0.4, comparing incremental
+  against full results over a corpus of scenes and deltas, including
+  deliberately corrupt ones.
 
 Exit criteria: benchmark gate green in CI; single-point drag on a 500-object
 scene inside the 4 ms and 2 MB budgets; `scale-drag-chain` at or below 0.2 and
