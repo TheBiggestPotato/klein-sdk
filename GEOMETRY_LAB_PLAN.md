@@ -14,7 +14,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | --- | --: | --: | --- |
 | 0 - Performance foundation | 10 | 12 | **Complete.** 0.3 and 0.7 closed on evidence as not worth doing; 0.12 added and landed |
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
-| 2 - Close the 2D gap | 4 | 5 | 2.2-2.5 landed; 2.1 half done - the Calculator's own migration onto the shared builders is the last piece |
+| 2 - Close the 2D gap | 5 | 5 | Complete |
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 0 | 6 | 4.1 can start any time |
 | 5 - Accessibility and output | 0 | 5 | |
@@ -68,8 +68,8 @@ the result would not follow its sources.
 **Fixed.** Task 2.2 gave the Lab fourteen construction methods on shared
 builders in geometry-core, so it and the Calculator cannot drift about what a
 construction means; task 2.3 gave 2D scenes a renderer and an export; task 2.4
-gave them measurements. What remains of Phase 2 is task 2.1's other half -
-migrating the Calculator onto the same builders.
+gave them measurements; task 2.1 finished by migrating the Calculator onto the
+same builders, so there is now one implementation of each construction.
 
 **The learning layer is one good idea, wired to nothing.**
 `computeGeometryInvariants` (`gradable-invariants.ts:80`) is well designed:
@@ -693,8 +693,8 @@ value is ever displayed as if it were live.
 
 ## Phase 2 - close the 2D gap
 
-- [~] **2.1 Share, do not duplicate.** *Half done, and the half that was
-  missing turned out to be smaller than the task assumed.*
+- [x] **2.1 Share, do not duplicate.** *Done. The missing half turned out to
+  be smaller than the task assumed.*
 
   The task read as though the Calculator held the 2D construction mathematics
   and the Lab needed a copy. It does not: `midpoint2D`,
@@ -714,10 +714,39 @@ value is ever displayed as if it were live.
   and an id allocator and return records for the caller to commit however it
   commits things.
 
-  The Lab uses them. **Migrating the Calculator onto them is still open**: it is
-  a behaviour-preserving refactor inside a 9,000-line file with a large test
-  surface, and it deserves its own change and its own differential run rather
-  than riding along with a feature.
+  Both instruments now use them. The Calculator's `addMidpoint`,
+  `addLineByPoints`, `addIntersection`, `addAngleBisectorByPoints`,
+  `addCircleByCenterPoint`, `addCircleThroughPoints`, `#addConstructedLine` and
+  the interactive line tool all build their records through the shared builders
+  and then apply what is genuinely local on top: theme colour on a helper point,
+  the fill alpha on a circle, the `circumcenter` record the Calculator keeps on
+  a circumcircle's centre, and its own error codes. Net -46 lines, and
+  `constructedLineEquation` and `helperPointForLineEquation` are gone.
+
+  Verified by a 113-capture differential over eight construction kinds by six
+  style variants, plus multi-result constructions, a chained figure, and drags
+  after each. The first version of that harness recorded which refusals threw
+  which code but not what happened *afterwards*, which is exactly where moving
+  an id allocation behind a validity check would show up - a refusal that used
+  to consume an id and no longer does shifts every id after it. Adding a
+  freshly created point after each of thirteen refusals closed that hole. Before
+  and after are byte-identical across all 113.
+
+  Three sites keep their own construction records, for reasons rather than
+  neglect:
+
+  - `addIntersections` solves the intersection once and maps the whole result
+    list. `buildIntersection2D` takes one index and re-solves per call, so
+    routing through it would solve the same problem once per result.
+  - `addLineByCoordinates` creates its two endpoints in the same batch as the
+    line. The builders read points from the scene, and these are not in it yet.
+  - `addTangentLines` has no builder to move to: the Lab does not offer
+    tangents, so a `buildTangentLine2D` would have exactly one caller. Worth
+    writing when the Lab grows the tool, not before.
+
+  All three write a typed member of the `GeometryConstruction` union, so a
+  change to the shape of a construction record is a compile error at these
+  sites rather than a silent drift.
 - [x] **2.2 Lab 2D methods** for every tool `GeometryLabTool` declares:
   `addPoint2D`, `addSegment2D`, `addRay2D`, `addVector2D`, `addLine2D`,
   `addPolygon2D`, `addAngle2D`, `addMidpoint2D`, `addIntersection2D`,

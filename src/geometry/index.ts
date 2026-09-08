@@ -16,6 +16,13 @@ import type {
   View2D,
 } from '../core/index.js';
 import {
+  buildAngleBisector2D,
+  buildCircleByCenterPoint2D,
+  buildCircleThroughPoints2D,
+  buildConstructedLine2D,
+  buildIntersection2D,
+  buildLineThroughPoints2D,
+  buildMidpoint2D,
   constrainGeometryScene,
   geometryAdjustSegmentLength as adjustSegmentLength,
   geometryLineConstraintPointIds as lineConstraintPointIds,
@@ -1825,15 +1832,11 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     this.#requireDistinctPoints(firstPointId, secondPointId);
     const first = this.#requirePoint2D(firstPointId);
     const second = this.#requirePoint2D(secondPointId);
-    const position = midpoint2D(first, second);
-    const point = withPointStyle({
-      id: this.#ids.next('p'),
-      kind: 'point2d',
-      x: position.x,
-      y: position.y,
-      locked: true,
-      construction: { kind: 'midpoint', sourceIds: [first.id, second.id] },
-    }, style);
+    // The record is shaped by the shared builder; the theme, the selection and
+    // the delta shape below are this instrument's own conventions.
+    const built = buildMidpoint2D(this.#snapshot.scene, first.id, second.id, prefix => this.#ids.next(prefix));
+    if (!built) throw new KleinSdkError('invalid_midpoint', 'A midpoint needs two distinct points.');
+    const point = withPointStyle(built.points[0] as GeometryPoint2D, style);
     this.#commitDelta({ op: 'addPoint', point: { ...point, locked: true } });
     this.#select({ kind: 'point', id: point.id });
     return point.id;
@@ -1849,18 +1852,11 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     this.#requireDistinctEntities(firstEntityId, secondEntityId);
     const first = this.#requireIntersectableEntity(firstEntityId);
     const second = this.#requireIntersectableEntity(secondEntityId);
-    const point = geometryIntersectionPoint2D(this.#snapshot.scene, first.id, second.id, index);
-    if (!point) {
+    const built = buildIntersection2D(this.#snapshot.scene, first.id, second.id, prefix => this.#ids.next(prefix), index);
+    if (!built) {
       throw new KleinSdkError('no_intersection', 'The selected objects do not intersect in a usable point.');
     }
-    const created = withPointStyle({
-      id: this.#ids.next('p'),
-      kind: 'point2d',
-      x: point.x,
-      y: point.y,
-      locked: true,
-      construction: { kind: 'intersection', sourceIds: [first.id, second.id], index },
-    }, style);
+    const created = withPointStyle(built.points[0] as GeometryPoint2D, style);
     this.#commitDelta({ op: 'addPoint', point: { ...created, locked: true } });
     this.#select({ kind: 'point', id: created.id });
     return created.id;
@@ -1959,31 +1955,22 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   ): string {
     this.#assertWritable();
     for (const pointId of pointIds) this.#requirePoint2D(pointId);
-    const vertex = this.#requirePoint2D(pointIds[1]);
-    const helperPosition = geometryAngleBisectorPoint2D(this.#snapshot.scene, pointIds);
-    if (!helperPosition) {
+    this.#requirePoint2D(pointIds[1]);
+    const built = buildAngleBisector2D(this.#snapshot.scene, pointIds, prefix => this.#ids.next(prefix));
+    if (!built) {
       throw new KleinSdkError('invalid_angle_bisector', 'Choose three non-degenerate points.');
     }
-    const equation = lineEquationFrom2DPoints(vertex, helperPosition);
-    if (!equation) {
-      throw new KleinSdkError('invalid_angle_bisector', 'Choose three non-degenerate points.');
-    }
+    // The builder leaves the helper unstyled; the Calculator paints it so that
+    // an unhidden helper matches the line it defines.
     const helper: GeometryPoint2D = {
-      id: this.#ids.next('p'),
-      kind: 'point2d',
-      x: helperPosition.x,
-      y: helperPosition.y,
+      ...(built.points[0] as GeometryPoint2D),
       color: style.color ?? this.#theme.drawColor,
-      hidden: true,
-      locked: true,
     };
-    const entity = withEntityStyle<LineEntity>({
-      id: this.#ids.next('line'),
-      kind: 'line',
-      pointIds: [vertex.id, helper.id],
-      equation,
-      construction: { kind: 'angleBisector', pointIds },
-    }, style, this.#theme.drawColor);
+    const entity = withEntityStyle<LineEntity>(
+      built.entities[0] as LineEntity,
+      style,
+      this.#theme.drawColor,
+    );
     this.#commitDelta({
       op: 'batch',
       deltas: [
@@ -2000,13 +1987,9 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     this.#requireDistinctPoints(firstPointId, secondPointId);
     const first = this.#requirePoint2D(firstPointId);
     const second = this.#requirePoint2D(secondPointId);
-    const entity = withEntityStyle<LineEntity>({
-      id: this.#ids.next('line'),
-      kind: 'line',
-      pointIds: [first.id, second.id],
-      equation: lineEquationFromPoints(first, second),
-      construction: { kind: 'lineThroughPoints', sourceIds: [first.id, second.id] },
-    }, style, this.#theme.drawColor);
+    const built = buildLineThroughPoints2D(this.#snapshot.scene, first.id, second.id, prefix => this.#ids.next(prefix));
+    if (!built) throw new KleinSdkError('invalid_line', 'A line needs two distinct points.');
+    const entity = withEntityStyle<LineEntity>(built.entities[0] as LineEntity, style, this.#theme.drawColor);
     this.#commitDelta({ op: 'addEntity', entity });
     this.#select({ kind: 'entity', id: entity.id });
     return entity.id;
@@ -2259,23 +2242,20 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   ): string {
     this.#assertWritable();
     this.#requireDistinctPoints(centerPointId, radiusPointId);
-    const center = this.#requirePoint2D(centerPointId);
-    const radiusPoint = this.#requirePoint2D(radiusPointId);
-    const radius = distance2D(center, radiusPoint);
-    if (!Number.isFinite(radius) || radius <= 0) {
+    this.#requirePoint2D(centerPointId);
+    this.#requirePoint2D(radiusPointId);
+    const built = buildCircleByCenterPoint2D(
+      this.#snapshot.scene,
+      centerPointId,
+      radiusPointId,
+      prefix => this.#ids.next(prefix),
+    );
+    if (!built) {
       throw new KleinSdkError('invalid_circle', 'Circle radius must be a positive number.');
     }
     const entity = withEntityStyle<CircleEntity>({
-      id: this.#ids.next('circle'),
-      kind: 'circle',
-      centerId: center.id,
-      radius,
+      ...(built.entities[0] as CircleEntity),
       fillColor: style.fillColor ?? colorWithAlpha(style.color ?? this.#theme.drawColor, 0.1),
-      construction: {
-        kind: 'circleCenterPoint',
-        centerPointId: center.id,
-        radiusPointId: radiusPoint.id,
-      },
     }, style, this.#theme.drawColor);
     this.#commitDelta({ op: 'addEntity', entity });
     this.#select({ kind: 'entity', id: entity.id });
@@ -2285,26 +2265,22 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   addCircleThroughPoints(pointIds: [string, string, string], style: GeometryStyleOptions = {}): string {
     this.#assertWritable();
     for (const pointId of pointIds) this.#requirePoint2D(pointId);
-    const circle = geometryCircumcircle2D(this.#snapshot.scene, pointIds);
-    if (!circle) {
+    const built = buildCircleThroughPoints2D(this.#snapshot.scene, pointIds, prefix => this.#ids.next(prefix));
+    if (!built) {
       throw new KleinSdkError('invalid_circle', 'Choose three non-collinear points.');
     }
+    // The circle's own recomputation already carries its centre along, so the
+    // builder leaves the centre bare. The Calculator additionally records the
+    // centre as a circumcentre, which is what makes it show up as derived from
+    // the three points in the object panel and the dependency cascade.
     const center = withPointStyle({
-      id: this.#ids.next('p'),
-      kind: 'point2d',
-      x: circle.center.x,
-      y: circle.center.y,
-      hidden: true,
-      locked: true,
+      ...(built.points[0] as GeometryPoint2D),
       construction: { kind: 'circumcenter', pointIds },
     }, style);
     const entity = withEntityStyle<CircleEntity>({
-      id: this.#ids.next('circle'),
-      kind: 'circle',
+      ...(built.entities[0] as CircleEntity),
       centerId: center.id,
-      radius: circle.radius,
       fillColor: style.fillColor ?? colorWithAlpha(style.color ?? this.#theme.drawColor, 0.1),
-      construction: { kind: 'circleThroughPoints', pointIds },
     }, style, this.#theme.drawColor);
     this.#commitDelta({
       op: 'batch',
@@ -2964,20 +2940,29 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     this.#assertWritable();
     const source = this.#requireLineLikeEntity(sourceEntityId);
     const through = this.#requirePoint2D(throughPointId);
-    const sourceEquation = entityLineEquation(this.#snapshot.scene, source);
-    const equation = constructedLineEquation(constructionKind, sourceEquation, through);
-    const helper = helperPointForLineEquation(equation, through, this.#ids, style.color ?? this.#theme.drawColor);
-    const entity = withEntityStyle<LineEntity>({
-      id: this.#ids.next('line'),
-      kind: 'line',
-      pointIds: [through.id, helper.id],
-      equation,
-      construction: {
-        kind: constructionKind,
-        sourceLineId: source.id,
-        throughPointId: through.id,
-      },
-    }, style, this.#theme.drawColor);
+    // Called for its refusals: a source whose points have gone missing is a
+    // `missing_point`, which the builder cannot distinguish from any other
+    // reason for having no equation.
+    entityLineEquation(this.#snapshot.scene, source);
+    const built = buildConstructedLine2D(
+      this.#snapshot.scene,
+      constructionKind,
+      source.id,
+      through.id,
+      prefix => this.#ids.next(prefix),
+    );
+    if (!built) {
+      throw new KleinSdkError('invalid_line_equation', 'Line equation must have a finite x or y coefficient.');
+    }
+    const helper: GeometryPoint2D = {
+      ...(built.points[0] as GeometryPoint2D),
+      color: style.color ?? this.#theme.drawColor,
+    };
+    const entity = withEntityStyle<LineEntity>(
+      built.entities[0] as LineEntity,
+      style,
+      this.#theme.drawColor,
+    );
     this.#commitDelta({
       op: 'batch',
       deltas: [
@@ -4661,13 +4646,19 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   ): SegmentEntity | LineEntity | RayEntity | VectorEntity {
     this.#requireDistinctPoints(firstPointId, secondPointId);
     if (tool === 'line') {
-      return withEntityStyle<LineEntity>({
-        id: this.#ids.next('line'),
-        kind: 'line',
-        pointIds: [firstPointId, secondPointId],
-        equation: lineEquationFromPoints(this.#requirePoint2D(firstPointId), this.#requirePoint2D(secondPointId)),
-        construction: { kind: 'lineThroughPoints', sourceIds: [firstPointId, secondPointId] },
-      }, {}, this.#theme.drawColor);
+      // Called for their refusals, which the builder folds into a single null.
+      this.#requirePoint2D(firstPointId);
+      this.#requirePoint2D(secondPointId);
+      // The same builder the `addLineByPoints` API path uses, so a line drawn
+      // with the tool and a line added through the API cannot differ.
+      const built = buildLineThroughPoints2D(
+        this.#snapshot.scene,
+        firstPointId,
+        secondPointId,
+        prefix => this.#ids.next(prefix),
+      );
+      if (!built) throw new KleinSdkError('degenerate_line', 'A line needs two distinct points.');
+      return withEntityStyle<LineEntity>(built.entities[0] as LineEntity, {}, this.#theme.drawColor);
     }
     if (tool === 'ray') {
       return withEntityStyle<RayEntity>({
@@ -6976,43 +6967,6 @@ function helperPointsForEquation(
     { id: ids.next('p'), kind: 'point2d', x: first.x, y: first.y, color, hidden: true, locked: true },
     { id: ids.next('p'), kind: 'point2d', x: second.x, y: second.y, color, hidden: true, locked: true },
   ];
-}
-
-function helperPointForLineEquation(
-  equation: GeometryLineEquation,
-  through: GeometryPoint2D,
-  ids: ReturnType<typeof createIdFactory>,
-  color: string,
-): GeometryPoint2D {
-  const direction = normalizeVector({ x: equation.b, y: -equation.a }) ?? { x: 1, y: 0 };
-  return {
-    id: ids.next('p'),
-    kind: 'point2d',
-    x: through.x + direction.x,
-    y: through.y + direction.y,
-    color,
-    hidden: true,
-    locked: true,
-  };
-}
-
-function constructedLineEquation(
-  constructionKind: 'parallelLine' | 'perpendicularLine',
-  source: GeometryLineEquation,
-  through: Vector2,
-): GeometryLineEquation {
-  if (constructionKind === 'parallelLine') {
-    return normalizeLineEquation({
-      a: source.a,
-      b: source.b,
-      c: -(source.a * through.x + source.b * through.y),
-    });
-  }
-  return normalizeLineEquation({
-    a: -source.b,
-    b: source.a,
-    c: -((-source.b) * through.x + source.a * through.y),
-  });
 }
 
 function solveLineY(equation: GeometryLineEquation, x: number): number {
