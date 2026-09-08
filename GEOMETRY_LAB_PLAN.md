@@ -14,7 +14,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | --- | --: | --: | --- |
 | 0 - Performance foundation | 10 | 12 | **Complete.** 0.3 and 0.7 closed on evidence as not worth doing; 0.12 added and landed |
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
-| 2 - Close the 2D gap | 1 | 5 | 2.2 landed on shared builders; 2.1 half done; 2.3-2.5 open |
+| 2 - Close the 2D gap | 4 | 5 | 2.2-2.5 landed; 2.1 half done - the Calculator's own migration onto the shared builders is the last piece |
 | 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
 | 4 - The learning layer | 0 | 6 | 4.1 can start any time |
 | 5 - Accessibility and output | 0 | 5 | |
@@ -65,9 +65,11 @@ what blocked them was an identity rule, not staleness.
 hand-build raw deltas - and had to write the `construction` metadata itself, or
 the result would not follow its sources.
 
-**Fixed by task 2.2**, on shared builders in geometry-core so the Lab and the
-Calculator cannot drift about what a construction means. The 2D *renderer* is
-still 3D-only (task 2.3), and 2D measurements do not exist yet (task 2.4).
+**Fixed.** Task 2.2 gave the Lab fourteen construction methods on shared
+builders in geometry-core, so it and the Calculator cannot drift about what a
+construction means; task 2.3 gave 2D scenes a renderer and an export; task 2.4
+gave them measurements. What remains of Phase 2 is task 2.1's other half -
+migrating the Calculator onto the same builders.
 
 **The learning layer is one good idea, wired to nothing.**
 `computeGeometryInvariants` (`gradable-invariants.ts:80`) is well designed:
@@ -733,14 +735,50 @@ value is ever displayed as if it were live.
   Helper points stay hidden and deliberately do **not** take the caller's style,
   so a labelled construction does not put scaffolding in the object list. A
   construction that cannot be built throws and leaves nothing behind.
-- [ ] **2.3 2D renderer.** `renderGeometryLabSvg3D` (`renderers.ts:101`) reads
-  only `scene3d`; the 2D scene is never rendered or exported. Add the 2D
-  renderer and include both in export, respecting `maxExportPrimitives`.
-- [ ] **2.4 2D measurements.** Add a `Measurement2D` record mirroring
-  `Measurement3D`: length, angle, area, perimeter, distance.
-- [ ] **2.5 Missing 3D measurements.** `MeasurementSource3D` covers four cases.
-  Add angle between lines, line-plane angle, point-line distance, skew-line
-  distance and 3D segment length.
+- [x] **2.3 2D renderer.** `renderGeometryLabSvg2D` draws points, segments,
+  rays, vectors, lines, polygons, circles, arcs, conics, parametric curves, loci
+  and angle marks, and `export({ format: 'svg' })` now reaches it.
+
+  Deliberately not a camera pipeline: a 2D scene has a pan and a zoom, so
+  world-to-screen is an offset and a scale, and the painter's problem the 3D
+  renderer solves does not arise. Depth sorting is replaced by a fixed paint
+  order - fills, curves, lines, then points and labels - so a vertex is never
+  buried under the polygon it defines. Infinite lines are clipped to the
+  viewport with Liang-Barsky rather than extended a long way, which keeps
+  coordinates inside the viewBox instead of writing 2,400-unit spans into a
+  640-unit picture.
+
+  **Which renderer runs needed care.** `activeView` defaults to `'2d'`, so
+  routing on it alone turned every existing 3D export blank - four tests caught
+  that. The view is now corroborated by the scene actually holding 2D content,
+  which preserves the old behaviour exactly: a snapshot with nothing 2D in it
+  still renders as 3D, as it always did.
+- [x] **2.4 2D measurements.** `Measurement2D` and a `scene2d.measurements`
+  collection, with six sources: distance between points, segment length,
+  point-line distance, angle, polygon area and polygon perimeter. Committed as a
+  source and recomputed by canonicalization, exactly like the 3D ones, so a
+  measurement tracks the figure instead of recording what it happened to be.
+
+  The collection is **optional**, and deliberately stays absent rather than
+  serializing as `{}` when a scene has none - so every snapshot written before
+  this keeps its exact shape and needs no migration. An existing `clear2D` test
+  caught the first attempt at that.
+
+  A new collection has to be joined to more places than it looks: the reducer,
+  the history record list *and* the history-patch validator's own list, the
+  dependency graph, the id-uniqueness scan, the invariant reference check, the
+  schema, and `clear2D`. Two of those were missed until a test found them - undo
+  failed on an unknown history collection, and a measurement id could collide
+  with a point. Both now have tests of their own.
+- [x] **2.5 Missing 3D measurements.** Added point-point distance, point-line
+  distance, line-line angle, line-plane angle, and line-line distance - the last
+  covering skew, parallel and intersecting lines alike, since parallel lines
+  have no common perpendicular and fall back to a point-to-line measure.
+
+  Two details worth stating: a line-line angle is undirected, so reversing a
+  line's defining points cannot turn 45 degrees into 135; and a line-plane angle
+  is measured from the plane rather than from its normal, so a vertical line
+  against the xy plane reads 90 and a line lying in it reads 0.
 
 ## Phase 3 - transformations and constraints
 

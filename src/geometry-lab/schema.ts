@@ -122,6 +122,8 @@ const DELTA_OPS: Record<GeometryLabDelta['op'], true> = {
   addWorkPlane: true,
   updateWorkPlane: true,
   deleteWorkPlane: true,
+  addMeasurement2D: true,
+  deleteMeasurement2D: true,
   addMeasurement: true,
   updateMeasurement: true,
   deleteMeasurement: true,
@@ -161,6 +163,7 @@ const RECORD_HISTORY_COLLECTIONS = new Set([
   'point2d',
   'entity2d',
   'constraint2d',
+  'measurement2d',
   'point3d',
   'entity3d',
   'workPlane',
@@ -277,12 +280,13 @@ function validateScene(value: unknown, path: string, context: ValidationContext)
 }
 
 function validateScene2D(value: unknown, path: string, context: ValidationContext): void {
-  const record = exactRecord(value, path, context, ['kind', 'points', 'entities', 'constraints']);
+  const record = exactRecord(value, path, context, ['kind', 'points', 'entities', 'constraints', 'measurements']);
   if (!record) return;
   required(record, 'kind', path, context, (item, itemPath, itemContext) => literal(item, itemPath, itemContext, 'geometry-lab-2d'));
   required(record, 'points', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validatePoint2D));
   required(record, 'entities', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateGeometryEntity));
   optional(record, 'constraints', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateGeometryConstraint));
+  optional(record, 'measurements', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateMeasurement2D));
 }
 
 function validateScene3D(value: unknown, path: string, context: ValidationContext): void {
@@ -763,6 +767,48 @@ function validateWorkPlaneThrough(record: UnknownRecord, path: string, context: 
   }
 }
 
+function validateMeasurement2D(value: unknown, path: string, context: ValidationContext): void {
+  const record = exactRecord(value, path, context, ['id', 'kind', 'value', 'unit', 'label', 'color', 'hidden', 'targetIds', 'source']);
+  if (!record) return;
+  required(record, 'id', path, context, nonEmptyString);
+  required(record, 'kind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['length', 'area', 'angle']));
+  required(record, 'value', path, context, finiteNumber);
+  optional(record, 'unit', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['u', 'u^2', 'deg']));
+  optional(record, 'label', path, context, stringValue);
+  optional(record, 'color', path, context, stringValue);
+  optional(record, 'hidden', path, context, booleanValue);
+  optional(record, 'targetIds', path, context, (item, itemPath, itemContext) => array(item, itemPath, itemContext, nonEmptyString));
+  required(record, 'source', path, context, validateMeasurementSource2D);
+}
+
+function validateMeasurementSource2D(value: unknown, path: string, context: ValidationContext): void {
+  const record = plainRecord(value, path, context);
+  if (!record) return;
+  if (record.kind === 'pointDistance') {
+    rejectUnknown(record, path, context, ['kind', 'firstPointId', 'secondPointId']);
+    required(record, 'firstPointId', path, context, nonEmptyString);
+    required(record, 'secondPointId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'segmentLength' || record.kind === 'polygonArea' || record.kind === 'polygonPerimeter') {
+    rejectUnknown(record, path, context, ['kind', 'entityId']);
+    required(record, 'entityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'pointLineDistance') {
+    rejectUnknown(record, path, context, ['kind', 'pointId', 'entityId']);
+    required(record, 'pointId', path, context, nonEmptyString);
+    required(record, 'entityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'angle') {
+    rejectUnknown(record, path, context, ['kind', 'pointIds']);
+    required(record, 'pointIds', path, context, idTupleValidator(3));
+    return;
+  }
+  issue(context, childPath(path, 'kind'), `Unknown 2D measurement source kind ${quoted(record.kind)}.`);
+}
+
 function validateMeasurement(value: unknown, path: string, context: ValidationContext): void {
   const record = exactRecord(value, path, context, ['id', 'targetId', 'targetIds', 'kind', 'value', 'unit', 'label', 'source']);
   if (!record) return;
@@ -884,7 +930,8 @@ function validateDeltaValue(value: unknown, path: string, context: ValidationCon
   else if (op === 'updateEntity') validateIdAndChanges(record, path, context, validateEntityChanges);
   else if (op === 'addWorkPlane') validateOpPayload(record, path, context, 'plane', validateWorkPlane);
   else if (op === 'updateWorkPlane') validateIdAndChanges(record, path, context, validateWorkPlaneChanges);
-  else if (op === 'deleteWorkPlane' || op === 'deleteMeasurement' || op === 'deleteNet' || op === 'delete') validateIdsOp(record, path, context);
+  else if (op === 'deleteWorkPlane' || op === 'deleteMeasurement' || op === 'deleteMeasurement2D' || op === 'deleteNet' || op === 'delete') validateIdsOp(record, path, context);
+  else if (op === 'addMeasurement2D') validateOpPayload(record, path, context, 'measurement', validateMeasurement2D);
   else if (op === 'addMeasurement') validateOpPayload(record, path, context, 'measurement', validateMeasurement);
   else if (op === 'updateMeasurement') validateIdAndChanges(record, path, context, validateMeasurementChanges);
   else if (op === 'addNet') validateOpPayload(record, path, context, 'net', validateNet);

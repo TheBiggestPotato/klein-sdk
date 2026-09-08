@@ -11,12 +11,15 @@ import {
 } from '../geometry-core/index.js';
 import type {
   GeometryPlaneEquation3D,
+  GeometryPoint2D,
   GeometryPoint3D,
   PlaneEntity,
 } from '../geometry-core/index.js';
 import type {
   CrossSectionEntity,
   GeometryLabSnapshot,
+  GeometryScene2D,
+  Measurement2D,
   GeometryScene3D,
   GeometrySelection,
   Measurement3D,
@@ -88,6 +91,8 @@ export function canonicalizeGeometryLabSnapshot(
   const legacySolidEdges = captureLegacySolidEdgeMappings(next.scene.scene3d);
   next.scene.scene2d = recomputeGeometryScene(next.scene.scene2d);
   assertRecomputableScene2D(next);
+
+  canonicalizeMeasurements2D(next.scene.scene2d);
 
   const scene3d = next.scene.scene3d;
   canonicalizeConstructions3D(scene3d);
@@ -188,6 +193,139 @@ function assertRecomputableScene2D(snapshot: GeometryLabSnapshot): void {
         `2D entity construction "${construction.kind}" is not deterministically supported.`,
       );
     }
+  }
+}
+
+/**
+ * Recomputes every 2D measurement from its source.
+ *
+ * <p>Same contract as the 3D measurements: what is stored is what the value is
+ * derived from, so the number follows the figure instead of recording what it
+ * happened to be when it was taken. A measurement whose source has gone, or has
+ * become something it cannot measure, fails the edit rather than keeping a
+ * stale value.
+ */
+function canonicalizeMeasurements2D(scene: GeometryScene2D): void {
+  const measurements = scene.measurements;
+  if (!measurements) return;
+
+  const point = (id: string, ownerId: string): GeometryPoint2D => {
+    const found = scene.points[id];
+    if (!found || found.kind !== 'point2d') {
+      fail('unrecomputable_measurement', ownerId, `Measurement "${ownerId}" references missing 2D point "${id}".`);
+    }
+    return found;
+  };
+  const polygonPoints = (id: string, ownerId: string): GeometryPoint2D[] => {
+    const entity = scene.entities[id];
+    if (!entity || entity.kind !== 'polygon') {
+      fail('unrecomputable_measurement', ownerId, `Measurement "${ownerId}" references missing polygon "${id}".`);
+    }
+    return entity.pointIds.map(pointId => point(pointId, ownerId));
+  };
+  const linePoints = (id: string, ownerId: string): [GeometryPoint2D, GeometryPoint2D] => {
+    const entity = scene.entities[id];
+    if (!entity || (entity.kind !== 'segment' && entity.kind !== 'line' && entity.kind !== 'ray' && entity.kind !== 'vector')) {
+      fail('unrecomputable_measurement', ownerId, `Measurement "${ownerId}" references missing line "${id}".`);
+    }
+    return [point(entity.pointIds[0], ownerId), point(entity.pointIds[1], ownerId)];
+  };
+  const requireKind = (measurement: Measurement2D, expected: Measurement2D['kind']): void => {
+    if (measurement.kind !== expected) {
+      fail('unrecomputable_measurement', measurement.id, `Measurement "${measurement.id}" has an incompatible source kind.`);
+    }
+  };
+  const distance = (first: Vector2, second: Vector2): number => Math.hypot(second.x - first.x, second.y - first.y);
+
+  for (const [id, measurement] of Object.entries(measurements)) {
+    const source = measurement.source;
+    if (source.kind === 'pointDistance' || source.kind === 'segmentLength') {
+      requireKind(measurement, 'length');
+      const [first, second] = source.kind === 'pointDistance'
+        ? [point(source.firstPointId, id), point(source.secondPointId, id)]
+        : linePoints(source.entityId, id);
+      measurements[id] = {
+        ...measurement,
+        value: distance(first, second),
+        unit: 'u',
+        targetIds: source.kind === 'pointDistance'
+          ? [source.firstPointId, source.secondPointId]
+          : [source.entityId],
+      };
+      continue;
+    }
+
+    if (source.kind === 'pointLineDistance') {
+      requireKind(measurement, 'length');
+      const from = point(source.pointId, id);
+      const [first, second] = linePoints(source.entityId, id);
+      const dx = second.x - first.x;
+      const dy = second.y - first.y;
+      const length = Math.hypot(dx, dy);
+      if (length <= EPSILON) {
+        fail('unrecomputable_measurement', id, `Measurement "${id}" references a line with coincident points.`);
+      }
+      // Twice the triangle's area over its base: the perpendicular height.
+      const cross = Math.abs(dx * (from.y - first.y) - dy * (from.x - first.x));
+      measurements[id] = {
+        ...measurement,
+        value: cross / length,
+        unit: 'u',
+        targetIds: [source.pointId, source.entityId],
+      };
+      continue;
+    }
+
+    if (source.kind === 'angle') {
+      requireKind(measurement, 'angle');
+      const [first, vertex, third] = source.pointIds.map(pointId => point(pointId, id)) as [GeometryPoint2D, GeometryPoint2D, GeometryPoint2D];
+      const armOne = { x: first.x - vertex.x, y: first.y - vertex.y };
+      const armTwo = { x: third.x - vertex.x, y: third.y - vertex.y };
+      const magnitude = Math.hypot(armOne.x, armOne.y) * Math.hypot(armTwo.x, armTwo.y);
+      if (magnitude <= EPSILON) {
+        fail('unrecomputable_measurement', id, `Measurement "${id}" has a degenerate angle.`);
+      }
+      const cosine = clamp((armOne.x * armTwo.x + armOne.y * armTwo.y) / magnitude, -1, 1);
+      measurements[id] = {
+        ...measurement,
+        value: radiansToDegrees(Math.acos(cosine)),
+        unit: 'deg',
+        targetIds: [...source.pointIds],
+      };
+      continue;
+    }
+
+    const vertices = polygonPoints(source.entityId, id);
+    if (vertices.length < 3) {
+      fail('unrecomputable_measurement', id, `Measurement "${id}" references a polygon with fewer than three vertices.`);
+    }
+    if (source.kind === 'polygonArea') {
+      requireKind(measurement, 'area');
+      // The shoelace formula, unsigned so winding order does not flip the sign.
+      let twiceArea = 0;
+      for (let index = 0; index < vertices.length; index += 1) {
+        const current = vertices[index] as GeometryPoint2D;
+        const next = vertices[(index + 1) % vertices.length] as GeometryPoint2D;
+        twiceArea += current.x * next.y - next.x * current.y;
+      }
+      measurements[id] = {
+        ...measurement,
+        value: Math.abs(twiceArea) / 2,
+        unit: 'u^2',
+        targetIds: [source.entityId],
+      };
+      continue;
+    }
+
+    requireKind(measurement, 'length');
+    let perimeter = 0;
+    for (let index = 0; index < vertices.length; index += 1) {
+      perimeter += distance(
+        vertices[index] as GeometryPoint2D,
+        vertices[(index + 1) % vertices.length] as GeometryPoint2D,
+      );
+    }
+    measurements[id] = { ...measurement, value: perimeter, unit: 'u', targetIds: [source.entityId] };
   }
 }
 

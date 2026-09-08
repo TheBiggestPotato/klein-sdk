@@ -57,7 +57,9 @@ import type {
   GeometryPolyhedronKind,
   GeometryScene3D,
   GeometrySelection,
+  Measurement2D,
   Measurement3D,
+  MeasurementSource2D,
   MeasurementSource3D,
   ParametricCurve3DInput,
   SolidCreationOptions,
@@ -1160,6 +1162,61 @@ class GeometryLabInstrument implements GeometryLab {
     };
     if (unit !== undefined) measurement.unit = unit;
     this.#commitDelta({ op: 'addMeasurement', measurement });
+    return measurement.id;
+  }
+
+  /**
+   * Measurements over the 2D figure: segment length, distance between points,
+   * distance from a point to a line, angle size, and a polygon's area and
+   * perimeter. The Lab could construct all of these shapes and could not report
+   * a single number about them.
+   *
+   * <p>Like their 3D counterparts, these commit a source and let
+   * canonicalization compute the value, which is what keeps the number correct
+   * when the figure moves under it.
+   */
+  addDistanceMeasurement2D(firstPointId: string, secondPointId: string, label = 'distance'): string {
+    return this.#addMeasurement2D({ kind: 'pointDistance', firstPointId, secondPointId }, 'length', 'u', label);
+  }
+
+  addLengthMeasurement2D(entityId: string, label = 'length'): string {
+    return this.#addMeasurement2D({ kind: 'segmentLength', entityId }, 'length', 'u', label);
+  }
+
+  addPointLineDistanceMeasurement2D(pointId: string, entityId: string, label = 'point-line distance'): string {
+    return this.#addMeasurement2D({ kind: 'pointLineDistance', pointId, entityId }, 'length', 'u', label);
+  }
+
+  addAngleMeasurement2D(pointIds: [string, string, string], label = 'angle'): string {
+    return this.#addMeasurement2D({ kind: 'angle', pointIds }, 'angle', 'deg', label);
+  }
+
+  addAreaMeasurement2D(polygonId: string, label = 'area'): string {
+    return this.#addMeasurement2D({ kind: 'polygonArea', entityId: polygonId }, 'area', 'u^2', label);
+  }
+
+  addPerimeterMeasurement2D(polygonId: string, label = 'perimeter'): string {
+    return this.#addMeasurement2D({ kind: 'polygonPerimeter', entityId: polygonId }, 'length', 'u', label);
+  }
+
+  #addMeasurement2D(
+    source: MeasurementSource2D,
+    kind: Measurement2D['kind'],
+    unit: Measurement2D['unit'],
+    label: string,
+  ): string {
+    this.#assertWritable();
+    const measurement: Measurement2D = {
+      id: this.#ids.next('m2'),
+      kind,
+      // Filled in by canonicalization during the commit, which also rejects the
+      // delta when the sources cannot support the measurement.
+      value: 0,
+      label,
+      source,
+    };
+    if (unit !== undefined) measurement.unit = unit;
+    this.#commitDelta({ op: 'addMeasurement2D', measurement });
     return measurement.id;
   }
 

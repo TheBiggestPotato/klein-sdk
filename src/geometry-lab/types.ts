@@ -48,6 +48,42 @@ export type GeometryLabTool =
 /** 2D Geometry Lab scene; currently extends the shared geometry graph with a scene discriminator. */
 export interface GeometryScene2D extends GeometryScene {
   kind: 'geometry-lab-2d';
+  /**
+   * Measurements over the 2D figure. Optional so that every snapshot written
+   * before they existed stays valid without a migration.
+   */
+  measurements?: Record<string, Measurement2D>;
+}
+
+/**
+ * What a 2D measurement is derived from.
+ *
+ * <p>The same design as {@link MeasurementSource3D}: the source is what is
+ * stored and the value is recomputed from it, so a measurement follows the
+ * figure instead of recording what it happened to be when it was taken. These
+ * are the quantities a 2D geometry lesson asks for - how long a segment is, how
+ * far apart two points are, how far a point is from a line, the size of an
+ * angle, and a polygon's area and perimeter.
+ */
+export type MeasurementSource2D =
+  | { kind: 'pointDistance'; firstPointId: string; secondPointId: string }
+  | { kind: 'segmentLength'; entityId: string }
+  | { kind: 'pointLineDistance'; pointId: string; entityId: string }
+  | { kind: 'angle'; pointIds: [string, string, string] }
+  | { kind: 'polygonArea'; entityId: string }
+  | { kind: 'polygonPerimeter'; entityId: string };
+
+/** A recomputed measurement over the 2D scene. */
+export interface Measurement2D {
+  id: string;
+  kind: 'length' | 'area' | 'angle';
+  value: number;
+  unit?: 'u' | 'u^2' | 'deg';
+  label?: string;
+  color?: string;
+  hidden?: boolean;
+  targetIds?: string[];
+  source: MeasurementSource2D;
 }
 
 /** 3D Geometry Lab scene content. Camera state stays in app state, not here. */
@@ -272,7 +308,7 @@ export type GeometryLabSnapshot = InstrumentSnapshot<GeometryLabScene, GeometryL
 
 /** Stable record locations used by collaboration-safe conditional history patches. */
 export type GeometryLabHistoryRef =
-  | { collection: 'point2d' | 'entity2d' | 'constraint2d' | 'point3d' | 'entity3d' | 'workPlane' | 'measurement' | 'net' | 'link'; id: string }
+  | { collection: 'point2d' | 'entity2d' | 'constraint2d' | 'measurement2d' | 'point3d' | 'entity3d' | 'workPlane' | 'measurement' | 'net' | 'link'; id: string }
   | { collection: 'appState'; key: string }
   | { collection: 'metadata' };
 
@@ -305,6 +341,8 @@ export type GeometryLabDelta =
   | { op: 'addWorkPlane'; plane: WorkPlane3D }
   | { op: 'updateWorkPlane'; id: string; changes: Partial<WorkPlane3D> }
   | { op: 'deleteWorkPlane'; ids: string[] }
+  | { op: 'addMeasurement2D'; measurement: Measurement2D }
+  | { op: 'deleteMeasurement2D'; ids: string[] }
   | { op: 'addMeasurement'; measurement: Measurement3D }
   | { op: 'updateMeasurement'; id: string; changes: Partial<Measurement3D> }
   | { op: 'deleteMeasurement'; ids: string[] }
@@ -388,6 +426,12 @@ export interface GeometryLab extends KleinInstrument<GeometryLabSnapshot, Geomet
   addWorkPlanePerpendicularToPlane(sourcePlaneId: string, through?: string | Vector3, style?: GeometryLabStyleOptions): string;
   addWorkPlanePerpendicularToLine(sourceEntityId: string, through?: string | Vector3, style?: GeometryLabStyleOptions): string;
   pointPlaneDistance(pointId: string, planeId: string): number;
+  addDistanceMeasurement2D(firstPointId: string, secondPointId: string, label?: string): string;
+  addLengthMeasurement2D(entityId: string, label?: string): string;
+  addPointLineDistanceMeasurement2D(pointId: string, entityId: string, label?: string): string;
+  addAngleMeasurement2D(pointIds: [string, string, string], label?: string): string;
+  addAreaMeasurement2D(polygonId: string, label?: string): string;
+  addPerimeterMeasurement2D(polygonId: string, label?: string): string;
   addPointPlaneDistanceMeasurement(pointId: string, planeId: string, label?: string): string;
   addDistanceMeasurement3D(firstPointId: string, secondPointId: string, label?: string): string;
   addPointLineDistanceMeasurement(pointId: string, lineEntityId: string, label?: string): string;

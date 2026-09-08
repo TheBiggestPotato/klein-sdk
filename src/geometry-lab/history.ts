@@ -22,6 +22,7 @@ const GEOMETRY_LAB_HISTORY_RECORD_COLLECTIONS = [
   'point2d',
   'entity2d',
   'constraint2d',
+  'measurement2d',
   'point3d',
   'entity3d',
   'workPlane',
@@ -277,6 +278,7 @@ function geometryLabHistoryRecord(
   switch (collection) {
     case 'point2d': return snapshot.scene.scene2d.points;
     case 'entity2d': return snapshot.scene.scene2d.entities;
+    case 'measurement2d': return snapshot.scene.scene2d.measurements ?? {};
     case 'constraint2d': return snapshot.scene.scene2d.constraints ?? {};
     case 'point3d': return snapshot.scene.scene3d.points;
     case 'entity3d': return snapshot.scene.scene3d.entities;
@@ -293,6 +295,9 @@ function writableGeometryLabHistoryRecord(
 ): Record<string, unknown> {
   if (collection === 'constraint2d' && !snapshot.scene.scene2d.constraints) {
     snapshot.scene.scene2d.constraints = {};
+  }
+  if (collection === 'measurement2d' && !snapshot.scene.scene2d.measurements) {
+    snapshot.scene.scene2d.measurements = {};
   }
   return geometryLabHistoryRecord(snapshot, collection);
 }
@@ -389,6 +394,7 @@ export function geometryLabIdPath(snapshot: GeometryLabSnapshot, id: string): st
     ['scene.scene2d.points', snapshot.scene.scene2d.points],
     ['scene.scene2d.entities', snapshot.scene.scene2d.entities],
     ['scene.scene2d.constraints', snapshot.scene.scene2d.constraints ?? {}],
+    ['scene.scene2d.measurements', snapshot.scene.scene2d.measurements ?? {}],
     ['scene.scene3d.points', snapshot.scene.scene3d.points],
     ['scene.scene3d.entities', snapshot.scene.scene3d.entities],
     ['scene.scene3d.workPlanes', snapshot.scene.scene3d.workPlanes],

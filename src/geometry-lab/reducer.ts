@@ -420,6 +420,32 @@ function applyGeometryLabDeltaUnchecked(
         snapshot,
         delta.ids.map(id => ({ collection: 'workPlane', id })),
       );
+    case 'addMeasurement2D':
+      assertGeometryLabIdAvailable(snapshot, delta.measurement.id, delta.op);
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: {
+            ...snapshot.scene.scene2d,
+            measurements: {
+              ...(snapshot.scene.scene2d.measurements ?? {}),
+              [delta.measurement.id]: delta.measurement,
+            },
+          },
+        },
+      };
+    case 'deleteMeasurement2D': {
+      const remaining = { ...(snapshot.scene.scene2d.measurements ?? {}) };
+      for (const id of delta.ids) delete remaining[id];
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: { ...snapshot.scene.scene2d, measurements: remaining },
+        },
+      };
+    }
     case 'addMeasurement':
       assertGeometryLabIdAvailable(snapshot, delta.measurement.id, delta.op);
       return {
@@ -614,6 +640,7 @@ function clearGeometryLabScope(
     addTargets('point2d', Object.keys(snapshot.scene.scene2d.points));
     addTargets('entity2d', Object.keys(snapshot.scene.scene2d.entities));
     addTargets('constraint2d', Object.keys(snapshot.scene.scene2d.constraints ?? {}));
+    addTargets('measurement2d', Object.keys(snapshot.scene.scene2d.measurements ?? {}));
   }
   if (scope === '3d' || scope === 'all') {
     addTargets('point3d', Object.keys(snapshot.scene.scene3d.points));
@@ -664,6 +691,7 @@ function deleteGeometryLabIds(
   const scene2dPoints = { ...snapshot.scene.scene2d.points };
   const scene2dEntities = { ...snapshot.scene.scene2d.entities };
   const scene2dConstraints = { ...(snapshot.scene.scene2d.constraints ?? {}) };
+  const scene2dMeasurements = { ...(snapshot.scene.scene2d.measurements ?? {}) };
   const scene3dPoints = { ...snapshot.scene.scene3d.points };
   const scene3dEntities = { ...snapshot.scene.scene3d.entities };
   const workPlanes = { ...snapshot.scene.scene3d.workPlanes };
@@ -675,6 +703,7 @@ function deleteGeometryLabIds(
       case 'point2d': delete scene2dPoints[ref.id]; break;
       case 'entity2d': delete scene2dEntities[ref.id]; break;
       case 'constraint2d': delete scene2dConstraints[ref.id]; break;
+      case 'measurement2d': delete scene2dMeasurements[ref.id]; break;
       case 'point3d': delete scene3dPoints[ref.id]; break;
       case 'entity3d': delete scene3dEntities[ref.id]; break;
       case 'workPlane': delete workPlanes[ref.id]; break;
@@ -709,6 +738,11 @@ function deleteGeometryLabIds(
         points: scene2dPoints,
         entities: scene2dEntities,
         constraints: scene2dConstraints,
+        // Carried only when the scene already had the collection. It is
+        // optional so that snapshots written before 2D measurements existed
+        // keep their exact shape, and introducing an empty one here would
+        // change the serialized form of every 2D scene that has none.
+        ...(snapshot.scene.scene2d.measurements ? { measurements: scene2dMeasurements } : {}),
       },
       scene3d: {
         ...snapshot.scene.scene3d,

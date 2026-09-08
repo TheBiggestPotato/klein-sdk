@@ -9,6 +9,7 @@ import type {
   GeometryLabSnapshot,
   GeometrySelection,
   Measurement3D,
+  MeasurementSource2D,
   WorkPlane3D,
 } from './types.js';
 
@@ -17,6 +18,7 @@ export type GeometryLabStoredCollection =
   | 'point2d'
   | 'entity2d'
   | 'constraint2d'
+  | 'measurement2d'
   | 'point3d'
   | 'entity3d'
   | 'workPlane'
@@ -147,6 +149,7 @@ const STORED_COLLECTIONS: readonly GeometryLabStoredCollection[] = [
   'point2d',
   'entity2d',
   'constraint2d',
+  'measurement2d',
   'point3d',
   'entity3d',
   'workPlane',
@@ -159,6 +162,7 @@ const GENERIC_REFERENCE_COLLECTIONS: readonly GeometryLabStoredCollection[] = [
   'point2d',
   'entity2d',
   'constraint2d',
+  'measurement2d',
   'point3d',
   'entity3d',
   'workPlane',
@@ -242,6 +246,7 @@ function populateGeometryLabDependencyGraph(
   addRecordNodes(builder, 'point2d', scene2d.points, 'scene.scene2d.points');
   addRecordNodes(builder, 'entity2d', scene2d.entities, 'scene.scene2d.entities');
   addRecordNodes(builder, 'constraint2d', scene2d.constraints ?? {}, 'scene.scene2d.constraints');
+  addRecordNodes(builder, 'measurement2d', scene2d.measurements ?? {}, 'scene.scene2d.measurements');
   addRecordNodes(builder, 'point3d', scene3d.points, 'scene.scene3d.points');
   addRecordNodes(builder, 'entity3d', scene3d.entities, 'scene.scene3d.entities');
   addRecordNodes(builder, 'workPlane', scene3d.workPlanes, 'scene.scene3d.workPlanes');
@@ -259,6 +264,14 @@ function populateGeometryLabDependencyGraph(
   }
   for (const constraint of Object.values(scene2d.constraints ?? {})) {
     addConstraintDependencies(builder, constraint);
+  }
+  for (const measurement of Object.values(scene2d.measurements ?? {})) {
+    // A 2D measurement depends on whatever it measures, so deleting a source
+    // takes the measurement with it rather than leaving a dangling number.
+    const dependent = storedRef('measurement2d', measurement.id);
+    for (const sourceId of geometryLabMeasurement2DSourceIds(measurement.source)) {
+      builder.addIdDependency(dependent, sourceId, 'measurementTarget', 'cascade', GENERIC_REFERENCE_COLLECTIONS);
+    }
   }
   for (const point of Object.values(scene3d.points)) {
     addConstructionDependencies(builder, storedRef('point3d', point.id), point.construction);
@@ -694,6 +707,22 @@ function addConstructionDependencies(
 ): void {
   for (const sourceId of geometryConstructionSourceIds(construction)) {
     builder.addIdDependency(dependent, sourceId, 'constructionSource', 'cascade', GENERIC_REFERENCE_COLLECTIONS);
+  }
+}
+
+/** Every object a 2D measurement is computed from. */
+export function geometryLabMeasurement2DSourceIds(source: MeasurementSource2D): string[] {
+  switch (source.kind) {
+    case 'pointDistance':
+      return [source.firstPointId, source.secondPointId];
+    case 'segmentLength':
+    case 'polygonArea':
+    case 'polygonPerimeter':
+      return [source.entityId];
+    case 'pointLineDistance':
+      return [source.pointId, source.entityId];
+    case 'angle':
+      return [...source.pointIds];
   }
 }
 

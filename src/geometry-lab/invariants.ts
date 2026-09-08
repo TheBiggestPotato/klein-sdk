@@ -1,7 +1,7 @@
 import { KleinSdkError } from '../core/index.js';
 import type { JsonValue, ValidationIssue, Vector2, Vector3 } from '../core/index.js';
 import type { GeometryConstruction, GeometryConstraint, GeometryEntity, GeometryPoint } from '../geometry-core/index.js';
-import { buildGeometryLabIntegrityView } from './dependencies.js';
+import { buildGeometryLabIntegrityView, geometryLabMeasurement2DSourceIds } from './dependencies.js';
 import type { GeometryLabDependencyKey, GeometryLabIntegrityView } from './dependencies.js';
 import type {
   GeometryEntity3D,
@@ -25,6 +25,7 @@ export function getGeometryLabInvariantIssues(snapshot: GeometryLabSnapshot): Va
   registerRecord('scene.scene2d.points', scene2d.points, seenIds, issues);
   registerRecord('scene.scene2d.entities', scene2d.entities, seenIds, issues);
   registerRecord('scene.scene2d.constraints', scene2d.constraints ?? {}, seenIds, issues);
+  registerRecord('scene.scene2d.measurements', scene2d.measurements ?? {}, seenIds, issues);
   registerRecord('scene.scene3d.points', scene3d.points, seenIds, issues);
   registerRecord('scene.scene3d.entities', scene3d.entities, seenIds, issues);
   registerRecord('scene.scene3d.workPlanes', scene3d.workPlanes, seenIds, issues);
@@ -70,6 +71,17 @@ export function getGeometryLabInvariantIssues(snapshot: GeometryLabSnapshot): Va
   }
   for (const [id, constraint] of Object.entries(scene2d.constraints ?? {})) {
     checkConstraintReferences(constraint, `scene.scene2d.constraints.${id}`, point2dIds, entity2dIds, issues);
+  }
+  for (const [id, measurement] of Object.entries(scene2d.measurements ?? {})) {
+    const path = `scene.scene2d.measurements.${id}`;
+    checkFinite(measurement.value, `${path}.value`, issues);
+    for (const sourceId of geometryLabMeasurement2DSourceIds(measurement.source)) {
+      // Sources are points or entities depending on the kind, so both sets are
+      // acceptable and only a name in neither is a dangling reference.
+      if (!point2dIds.has(sourceId) && !entity2dIds.has(sourceId)) {
+        addIssue(issues, `${path}.source`, `Measurement references missing 2D object "${sourceId}".`);
+      }
+    }
   }
   for (const [id, entity] of Object.entries(scene3d.entities)) {
     checkEntity3D(entity, `scene.scene3d.entities.${id}`, point3dIds, entity3dIds, workPlaneIds, topLevelIds, issues);
