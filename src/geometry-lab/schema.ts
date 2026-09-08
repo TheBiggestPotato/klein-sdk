@@ -90,6 +90,7 @@ const GEOMETRY_CONSTRUCTION_KINDS: Record<GeometryConstruction['kind'], true> = 
   tangentLine: true,
   angleBisector: true,
   angleFromLines: true,
+  transformedPoint: true,
   linePlaneIntersection: true,
   planePlaneIntersection: true,
   custom: true,
@@ -420,6 +421,10 @@ function validateConstruction(value: unknown, path: string, context: ValidationC
     rejectUnknown(record, path, context, ['kind', 'sourceLineId', 'throughPointId']);
     required(record, 'sourceLineId', path, context, nonEmptyString);
     required(record, 'throughPointId', path, context, nonEmptyString);
+  } else if (kind === 'transformedPoint') {
+    rejectUnknown(record, path, context, ['kind', 'sourceId', 'transform']);
+    required(record, 'sourceId', path, context, nonEmptyString);
+    required(record, 'transform', path, context, validateGeometryTransform2D);
   } else if (kind === 'linePlaneIntersection') {
     rejectUnknown(record, path, context, ['kind', 'lineEntityId', 'planeId']);
     required(record, 'lineEntityId', path, context, nonEmptyString);
@@ -767,6 +772,49 @@ function validateWorkPlaneThrough(record: UnknownRecord, path: string, context: 
   if (hasOwn(record, 'throughPointId') && hasOwn(record, 'through')) {
     issue(context, path, 'A work-plane source cannot define both throughPointId and through.');
   }
+}
+
+function validateGeometryTransform2D(value: unknown, path: string, context: ValidationContext): void {
+  const record = plainRecord(value, path, context);
+  if (!record) return;
+  if (record.kind === 'translate') {
+    rejectUnknown(record, path, context, ['kind', 'vectorEntityId']);
+    required(record, 'vectorEntityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'translateBy') {
+    rejectUnknown(record, path, context, ['kind', 'dx', 'dy']);
+    required(record, 'dx', path, context, finiteNumber);
+    required(record, 'dy', path, context, finiteNumber);
+    return;
+  }
+  if (record.kind === 'rotate') {
+    rejectUnknown(record, path, context, ['kind', 'centerPointId', 'degrees']);
+    required(record, 'centerPointId', path, context, nonEmptyString);
+    required(record, 'degrees', path, context, finiteNumber);
+    return;
+  }
+  if (record.kind === 'reflectLine') {
+    rejectUnknown(record, path, context, ['kind', 'lineEntityId']);
+    required(record, 'lineEntityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'reflectPoint') {
+    rejectUnknown(record, path, context, ['kind', 'centerPointId']);
+    required(record, 'centerPointId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'dilate') {
+    rejectUnknown(record, path, context, ['kind', 'centerPointId', 'factor']);
+    required(record, 'centerPointId', path, context, nonEmptyString);
+    // Zero would collapse every image onto the centre, which is not a dilation.
+    required(record, 'factor', path, context, (item, itemPath, itemContext) => {
+      finiteNumber(item, itemPath, itemContext);
+      if (item === 0) issue(itemContext, itemPath, 'A dilation factor cannot be zero.');
+    });
+    return;
+  }
+  issue(context, childPath(path, 'kind'), `Unknown transformation kind ${quoted(record.kind)}.`);
 }
 
 function validateMeasurement2D(value: unknown, path: string, context: ValidationContext): void {

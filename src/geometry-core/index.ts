@@ -20,9 +20,34 @@ export type GeometryConstruction =
   // two planes meet. Before these existed the instrument computed the position
   // once and stored a free point, so moving the plane left the "intersection"
   // behind - a figure that quietly stopped being true.
+  // The image of another object under a transformation. The transform's own
+  // parameters are objects too - a mirror line, a centre of rotation, a
+  // translation vector - so the image follows both its source and the thing
+  // transforming it, which is what makes reflecting a triangle in a line worth
+  // doing on screen rather than on paper.
+  | { kind: 'transformedPoint'; sourceId: string; transform: GeometryTransform2D }
   | { kind: 'linePlaneIntersection'; lineEntityId: string; planeId: string }
   | { kind: 'planePlaneIntersection'; firstPlaneId: string; secondPlaneId: string; end: 0 | 1 }
   | { kind: 'custom'; sourceIds: string[]; label?: string };
+
+/**
+ * A plane transformation, described by the objects that define it.
+ *
+ * <p>Deliberately not a matrix. `rotate` naming a centre *point* means the image
+ * turns when that point is dragged; a matrix would freeze the numbers at the
+ * moment the transformation was applied, which is what makes a transformation
+ * tool a one-off edit instead of a construction.
+ *
+ * <p>`translateBy` is the exception, for a fixed offset with no vector to point
+ * at. It is the only member whose parameters are numbers alone.
+ */
+export type GeometryTransform2D =
+  | { kind: 'translate'; vectorEntityId: string }
+  | { kind: 'translateBy'; dx: number; dy: number }
+  | { kind: 'rotate'; centerPointId: string; degrees: number }
+  | { kind: 'reflectLine'; lineEntityId: string }
+  | { kind: 'reflectPoint'; centerPointId: string }
+  | { kind: 'dilate'; centerPointId: string; factor: number };
 
 /** Serializable 2D point used by construction and whiteboard-style geometry scenes. */
 export interface GeometryPoint2D extends Vector2 {
@@ -394,6 +419,8 @@ export function geometryConstructionSourceIds(construction: GeometryConstruction
       return uniqueStrings([construction.sourceLineId, construction.throughPointId]);
     case 'tangentLine':
       return uniqueStrings([construction.circleId, construction.throughPointId]);
+    case 'transformedPoint':
+      return uniqueStrings([construction.sourceId, ...geometryTransform2DSourceIds(construction.transform)]);
     case 'linePlaneIntersection':
       return uniqueStrings([construction.lineEntityId, construction.planeId]);
     case 'planePlaneIntersection':
@@ -1005,7 +1032,73 @@ export function buildLineThroughPoints2D(
   return { points: [], entities: [line], primaryId: id };
 }
 
-/** Equation of any line-like 2D entity, or null when it has none. */
+/**
+ * Builds the image of a point or an entity under a transformation.
+ *
+ * <p>Transforming a whole object is the operation a lesson actually asks for -
+ * "reflect this triangle in that line" - so an entity produces an image point
+ * per vertex, each individually constructed, plus a matching entity joining
+ * them. Every image point follows both its own source vertex and the
+ * transformation's defining objects, so dragging the mirror drags the whole
+ * reflected triangle.
+ */
+export function buildTransformedObject2D(
+  scene: GeometryScene,
+  targetId: string,
+  transform: GeometryTransform2D,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const imageOf = (sourceId: string): GeometryPoint2D | null => {
+    const source = scene.points[sourceId];
+    if (!isGeometryPoint2D(source)) return null;
+    const position = applyGeometryTransform2D(scene, transform, source);
+    if (!position) return null;
+    return point2D(allocate('p'), position, {
+      construction: { kind: 'transformedPoint', sourceId, transform },
+    });
+  };
+
+  const targetPoint = scene.points[targetId];
+  if (isGeometryPoint2D(targetPoint)) {
+    const image = imageOf(targetId);
+    return image ? { points: [image], entities: [], primaryId: image.id } : null;
+  }
+
+  const entity = scene.entities[targetId];
+  if (!entity) return null;
+
+  // Only entities defined purely by their vertices can be transformed this way.
+  // A circle carries a radius and a conic its own sampled points, so each would
+  // need its own rule rather than a vertex mapping.
+  if (!('pointIds' in entity) || entity.pointIds.length === 0) return null;
+  if (entity.kind !== 'segment' && entity.kind !== 'ray' && entity.kind !== 'vector' && entity.kind !== 'polygon') {
+    return null;
+  }
+
+  const images: GeometryPoint2D[] = [];
+  for (const sourceId of entity.pointIds) {
+    const image = imageOf(sourceId);
+    if (!image) return null;
+    images.push(image);
+  }
+
+  const entityId = allocate(entity.kind === 'polygon' ? 'poly' : 'seg');
+  const imageEntity = {
+    ...entity,
+    id: entityId,
+    pointIds: entity.kind === 'polygon'
+      ? images.map(image => image.id)
+      : [images[0]?.id, images[1]?.id],
+  } as GeometryEntity;
+  // The image is a new object rather than a construction of the original
+  // entity: its vertices already carry the link, and duplicating it here would
+  // make the same dependency twice.
+  delete (imageEntity as { construction?: unknown }).construction;
+
+  return { points: images, entities: [imageEntity], primaryId: entityId };
+}
+
+/** Equation of any line-like 2D entity, or null when it has none. *//** Equation of any line-like 2D entity, or null when it has none. */
 export function geometryLineLikeEquation2D(
   scene: GeometryScene,
   entityId: string,
@@ -1040,6 +1133,84 @@ export function geometryObjectDependencies(scene: GeometryScene, objectId: strin
   return uniqueStrings([
     ...geometryEntityPointIds(entity),
   ]);
+}
+
+/** Objects a transformation is defined by, which its images therefore depend on. */
+export function geometryTransform2DSourceIds(transform: GeometryTransform2D): string[] {
+  switch (transform.kind) {
+    case 'translate':
+      return [transform.vectorEntityId];
+    case 'translateBy':
+      return [];
+    case 'rotate':
+    case 'reflectPoint':
+    case 'dilate':
+      return [transform.centerPointId];
+    case 'reflectLine':
+      return [transform.lineEntityId];
+  }
+}
+
+/**
+ * Maps one point through a transformation, or null when the transformation's
+ * own defining objects are missing or degenerate.
+ */
+export function applyGeometryTransform2D(
+  scene: GeometryScene,
+  transform: GeometryTransform2D,
+  point: Vector2,
+): Vector2 | null {
+  if (transform.kind === 'translateBy') {
+    if (!Number.isFinite(transform.dx) || !Number.isFinite(transform.dy)) return null;
+    return { x: point.x + transform.dx, y: point.y + transform.dy };
+  }
+
+  if (transform.kind === 'translate') {
+    const entity = scene.entities[transform.vectorEntityId];
+    if (!entity || !('pointIds' in entity) || entity.pointIds.length < 2) return null;
+    const from = scene.points[entity.pointIds[0] as string];
+    const to = scene.points[entity.pointIds[1] as string];
+    if (!isGeometryPoint2D(from) || !isGeometryPoint2D(to)) return null;
+    return { x: point.x + (to.x - from.x), y: point.y + (to.y - from.y) };
+  }
+
+  if (transform.kind === 'reflectLine') {
+    const equation = geometryLineLikeEquation2D(scene, transform.lineEntityId);
+    if (!equation) return null;
+    // Reflection across `a x + b y + c = 0`, with the normal already unit
+    // length because the equation is normalized on the way in.
+    const magnitudeSquared = equation.a * equation.a + equation.b * equation.b;
+    if (magnitudeSquared <= 1e-18) return null;
+    const signedDistance = (equation.a * point.x + equation.b * point.y + equation.c) / magnitudeSquared;
+    return {
+      x: point.x - 2 * equation.a * signedDistance,
+      y: point.y - 2 * equation.b * signedDistance,
+    };
+  }
+
+  const centre = scene.points[transform.centerPointId];
+  if (!isGeometryPoint2D(centre)) return null;
+  const dx = point.x - centre.x;
+  const dy = point.y - centre.y;
+
+  if (transform.kind === 'reflectPoint') {
+    // A half turn: the centre is the midpoint of a point and its image.
+    return { x: centre.x - dx, y: centre.y - dy };
+  }
+
+  if (transform.kind === 'dilate') {
+    if (!Number.isFinite(transform.factor) || transform.factor === 0) return null;
+    return { x: centre.x + dx * transform.factor, y: centre.y + dy * transform.factor };
+  }
+
+  if (!Number.isFinite(transform.degrees)) return null;
+  const radians = (transform.degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return {
+    x: centre.x + dx * cos - dy * sin,
+    y: centre.y + dx * sin + dy * cos,
+  };
 }
 
 /** Source object ids referenced by a serializable constraint. */
@@ -1608,6 +1779,15 @@ function recomputeGeometryPoint<T extends GeometryScene>(
   if (point.construction.kind === 'circumcenter') {
     const circle = geometryCircumcircle2D(scene, point.construction.pointIds);
     if (circle) updateGeometryPointPosition(draft, point, circle.center);
+    return;
+  }
+
+  if (point.construction.kind === 'transformedPoint') {
+    const { sourceId, transform } = point.construction;
+    const source = scene.points[sourceId];
+    if (!isGeometryPoint2D(source)) return;
+    const image = applyGeometryTransform2D(scene, transform, source);
+    if (image) updateGeometryPointPosition(draft, point, image);
     return;
   }
 
@@ -2216,6 +2396,8 @@ function geometryConstructionKindLabel(kind: GeometryConstruction['kind']): stri
       return 'Angle bisector';
     case 'angleFromLines':
       return 'Angle from lines';
+    case 'transformedPoint':
+      return 'Transformed point';
     case 'linePlaneIntersection':
       return 'Line-plane intersection';
     case 'planePlaneIntersection':

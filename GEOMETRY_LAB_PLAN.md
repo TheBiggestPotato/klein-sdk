@@ -15,7 +15,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 0 - Performance foundation | 10 | 12 | **Complete.** 0.3 and 0.7 closed on evidence as not worth doing; 0.12 added and landed |
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
 | 2 - Close the 2D gap | 4 | 5 | 2.2-2.5 landed; 2.1 half done - the Calculator's own migration onto the shared builders is the last piece |
-| 3 - Transformations and constraints | 2 | 3 | 3.2 and 3.3 landed; 3.1 transformations open |
+| 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 0 | 6 | 4.1 can start any time |
 | 5 - Accessibility and output | 0 | 5 | |
 | 6 - Mathematical depth | 0 | 5 | |
@@ -782,11 +782,31 @@ value is ever displayed as if it were live.
 
 ## Phase 3 - transformations and constraints
 
-- [ ] **3.1 Transformation deltas.** `reflect`, `rotate`, `translate`, `dilate`,
-  in 2D and 3D, with a `transform` construction kind so images stay live under
-  the Phase 1 recompute. The tools `scale`, `rotate`, `stamp` and `cut` are
-  already declared in `GeometryLabTool` with no implementation behind them, and
-  `GEOMETRY_LAB_EXERCISES.md` already asks students to mirror a figure by hand.
+- [x] **3.1 Transformations.** Translation (by a vector or a fixed offset),
+  rotation about a point, reflection in a line and in a point, and dilation -
+  as the `transformedPoint` construction kind, applied to a point or to any
+  vertex-defined entity through `transform2D` and five named shorthands.
+
+  **The transform's parameters are objects, not numbers.** A rotation names a
+  centre *point*; a reflection names a mirror *line*; a translation can name a
+  *vector*. So the image follows two things at once: drag the original and the
+  image follows, drag the mirror and the whole reflected figure sweeps around.
+  That is the difference between a transformation tool and a one-off edit, and
+  it is the entire reason to do this on a screen rather than on paper. A matrix
+  would have frozen the numbers at the moment the transformation was applied.
+
+      triangle              [[1,2],  [4,2],  [1,5]]
+      reflected in the x axis  [[1,-2], [4,-2], [1,-5]]
+      mirror tilted to y = x   [[2,1],  [2,4],  [5,1]]
+
+  Images of images chain and settle in one commit. A circle is **refused**
+  rather than transformed: its radius is not a vertex list, so mapping vertices
+  would silently lose it, and it needs a rule of its own.
+
+  Note the Calculator's own `rotateSelection`, `reflectSelection` and friends
+  remain one-off coordinate edits. They are a different operation - moving what
+  you selected - and are not replaced by this.
+
 - [x] **3.2 Constraint solving.** `scene2d.constraints` was typed, validated,
   persisted and cascaded from the start, and nothing ever enforced it - a
   segment declared five units long could be dragged to any length, so a

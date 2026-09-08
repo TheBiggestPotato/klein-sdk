@@ -12,6 +12,7 @@ import type {
 import type {
   GeometryConstraint,
   GeometryEntity,
+  GeometryTransform2D,
   GeometryPlaneEquation3D,
   GeometryPoint2D,
   GeometryPoint3D,
@@ -438,6 +439,13 @@ export interface GeometryLab extends KleinInstrument<GeometryLabSnapshot, Geomet
   addWorkPlanePerpendicularToPlane(sourcePlaneId: string, through?: string | Vector3, style?: GeometryLabStyleOptions): string;
   addWorkPlanePerpendicularToLine(sourceEntityId: string, through?: string | Vector3, style?: GeometryLabStyleOptions): string;
   pointPlaneDistance(pointId: string, planeId: string): number;
+  transform2D(targetId: string, transform: GeometryTransform2D, style?: GeometryLabStyleOptions): string;
+  translate2D(targetId: string, vectorEntityId: string, style?: GeometryLabStyleOptions): string;
+  translateBy2D(targetId: string, dx: number, dy: number, style?: GeometryLabStyleOptions): string;
+  rotate2D(targetId: string, centerPointId: string, degrees: number, style?: GeometryLabStyleOptions): string;
+  reflectInLine2D(targetId: string, lineEntityId: string, style?: GeometryLabStyleOptions): string;
+  reflectInPoint2D(targetId: string, centerPointId: string, style?: GeometryLabStyleOptions): string;
+  dilate2D(targetId: string, centerPointId: string, factor: number, style?: GeometryLabStyleOptions): string;
   addConstraint2D(constraint: GeometryConstraintDraft2D): string;
   removeConstraint2D(ids: string | string[]): void;
   addDistanceMeasurement2D(firstPointId: string, secondPointId: string, label?: string): string;

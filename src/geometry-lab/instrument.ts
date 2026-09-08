@@ -16,6 +16,8 @@ import type {
 } from '../core/index.js';
 import {
   buildAngleBisector2D,
+  buildTransformedObject2D,
+  geometryTransform2DSourceIds,
   geometryConstraintDependencies,
   buildCircleByCenterPoint2D,
   buildCircleThroughPoints2D,
@@ -35,6 +37,7 @@ import type {
   GeometryLine3D,
   GeometryPlaneEquation3D,
   GeometryPoint2D,
+  GeometryTransform2D,
   GeometryPoint3D,
   LineEntity,
   PlaneEntity,
@@ -1188,6 +1191,64 @@ class GeometryLabInstrument implements GeometryLab {
    * Calculator and runs during canonicalization, so a constraint holds however
    * the figure is edited, not only through the method that set it.
    */
+  /**
+   * Builds the image of a point or a vertex-defined entity under a plane
+   * transformation - translation, rotation, reflection in a line or in a point,
+   * and dilation.
+   *
+   * <p>`scale`, `rotate`, `stamp` and `cut` have been declared tools since the
+   * model was written, with nothing behind any of them, and the exercise bank
+   * asks students to mirror a figure by copying it across by hand.
+   *
+   * <p>The image is a *construction*, not a copy: each image vertex records its
+   * source and the transformation, so dragging the original moves the image, and
+   * dragging the mirror line sweeps the image around. That is the difference
+   * between a transformation tool and a one-off edit, and it is the whole reason
+   * to do this on a screen.
+   */
+  transform2D(targetId: string, transform: GeometryTransform2D, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    const scene = this.#snapshot.scene.scene2d;
+    if (!scene.points[targetId] && !scene.entities[targetId]) {
+      throw new KleinSdkError('invalid_transform_target', `2D object "${targetId}" does not exist.`);
+    }
+    for (const sourceId of geometryTransform2DSourceIds(transform)) {
+      if (!scene.points[sourceId] && !scene.entities[sourceId]) {
+        throw new KleinSdkError('invalid_transform_reference', `2D object "${sourceId}" does not exist.`);
+      }
+    }
+    return this.#commit2DConstruction(
+      buildTransformedObject2D(scene, targetId, transform, (prefix: string) => this.#ids.next(prefix)),
+      style,
+      'invalid_transform',
+      'That object cannot be transformed - a circle or a curve needs its own rule, and the transformation must be defined.',
+    );
+  }
+
+  translate2D(targetId: string, vectorEntityId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'translate', vectorEntityId }, style);
+  }
+
+  translateBy2D(targetId: string, dx: number, dy: number, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'translateBy', dx, dy }, style);
+  }
+
+  rotate2D(targetId: string, centerPointId: string, degrees: number, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'rotate', centerPointId, degrees }, style);
+  }
+
+  reflectInLine2D(targetId: string, lineEntityId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'reflectLine', lineEntityId }, style);
+  }
+
+  reflectInPoint2D(targetId: string, centerPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'reflectPoint', centerPointId }, style);
+  }
+
+  dilate2D(targetId: string, centerPointId: string, factor: number, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'dilate', centerPointId, factor }, style);
+  }
+
   addConstraint2D(constraint: GeometryConstraintDraft2D): string {
     this.#assertWritable();
     for (const id of geometryConstraintDependencies({ ...constraint, id: 'draft' } as GeometryConstraint)) {

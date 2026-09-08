@@ -3,6 +3,7 @@ import {
   geometryAngleBisectorPoint2D,
   geometryCircleTangentPoint2D,
   geometryCircumcircle2D,
+  applyGeometryTransform2D,
   constrainGeometryScene,
   geometryIntersectionPoint2D,
   lineEquationFrom2DPoints,
@@ -136,6 +137,18 @@ function assertRecomputableScene2D(snapshot: GeometryLabSnapshot): void {
       const [firstId, secondId] = construction.sourceIds;
       if (scene.points[firstId]?.kind !== 'point2d' || scene.points[secondId]?.kind !== 'point2d') {
         fail('unrecomputable_2d', point.id, `Midpoint "${point.id}" has a missing 2D source point.`);
+      }
+    } else if (construction.kind === 'transformedPoint') {
+      const source = scene.points[construction.sourceId];
+      if (source?.kind !== 'point2d') {
+        fail('unrecomputable_2d', point.id, `Transformed point "${point.id}" has a missing source.`);
+      }
+      if (!applyGeometryTransform2D(scene, construction.transform, source)) {
+        fail(
+          'unrecomputable_2d',
+          point.id,
+          `Transformed point "${point.id}" has an undefined transformation - its mirror, centre or vector is missing or degenerate.`,
+        );
       }
     } else {
       fail(
