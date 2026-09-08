@@ -242,6 +242,26 @@ export function buildSlicedSolidsScene(sectionCount) {
   return { lab, corners };
 }
 
+/**
+ * A chain of segments held together by twenty constraints.
+ *
+ * <p>The relaxation solver is the classic way a geometry tool loses its frame
+ * budget: it nudges points until they stop moving, and an over-constrained
+ * figure never stops. This case exists to keep the iteration cap honest -
+ * dragging one end must stay inside the drag budget no matter how tangled the
+ * constraint set is.
+ */
+export function buildConstrainedScene(constraintCount) {
+  const lab = createGeometryLab({ initialView: '2d' });
+  const points = [lab.addPoint2D({ x: 0, y: 0 })];
+  for (let index = 1; index <= constraintCount; index += 1) {
+    points.push(lab.addPoint2D({ x: index * 3, y: coordinate(index, 9) }));
+    lab.addSegment2D(points[index - 1], points[index]);
+    lab.addConstraint2D({ kind: 'fixedLength', pointIds: [points[index - 1], points[index]], length: 3 });
+  }
+  return { lab, dragId: points[points.length - 1] };
+}
+
 /** A 2D figure sized for the invariant reporter, whose own cap is 24 points. */
 export function buildInvariantScene(pointCount) {
   const lab = createGeometryLab();
@@ -455,6 +475,20 @@ export const CASES = [
           deltas: corners.map(id => ({ op: 'updatePoint', id, changes: { z } })),
         });
       };
+    },
+  },
+  {
+    id: 'drag-20-constraints',
+    title: 'Drag one end of a chain held by 20 fixed-length constraints',
+    findings: [],
+    budgetMs: 4,
+    run() {
+      const { lab, dragId } = buildConstrainedScene(20);
+      return (index) => lab.applyDelta({
+        op: 'updatePoint',
+        id: dragId,
+        changes: { x: 60 + (index % 10), y: (index % 7) - 3 },
+      });
     },
   },
   {

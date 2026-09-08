@@ -10,6 +10,7 @@ import type {
   View2D,
 } from '../core/index.js';
 import type {
+  GeometryConstraint,
   GeometryEntity,
   GeometryPlaneEquation3D,
   GeometryPoint2D,
@@ -106,6 +107,15 @@ export interface GeometryLabStyleOptions {
   hidden?: boolean;
   locked?: boolean;
 }
+
+/** A constraint without its id, which the instrument assigns. */
+export type GeometryConstraintDraft2D =
+  | { kind: 'fixedLength'; pointIds: [string, string]; length: number; label?: string; enabled?: boolean }
+  | { kind: 'fixedAngle'; pointIds: [string, string, string]; degrees: number; label?: string; enabled?: boolean }
+  | { kind: 'parallel'; entityIds: [string, string]; label?: string; enabled?: boolean }
+  | { kind: 'perpendicular'; entityIds: [string, string]; label?: string; enabled?: boolean }
+  | { kind: 'equalLength'; segments: [[string, string], [string, string]]; label?: string; enabled?: boolean }
+  | { kind: 'equalRadius'; circleIds: [string, string]; label?: string; enabled?: boolean };
 
 export type EquationAxis3D = 'x' | 'y' | 'z';
 
@@ -341,6 +351,8 @@ export type GeometryLabDelta =
   | { op: 'addWorkPlane'; plane: WorkPlane3D }
   | { op: 'updateWorkPlane'; id: string; changes: Partial<WorkPlane3D> }
   | { op: 'deleteWorkPlane'; ids: string[] }
+  | { op: 'addConstraint2D'; constraint: GeometryConstraint }
+  | { op: 'deleteConstraint2D'; ids: string[] }
   | { op: 'addMeasurement2D'; measurement: Measurement2D }
   | { op: 'deleteMeasurement2D'; ids: string[] }
   | { op: 'addMeasurement'; measurement: Measurement3D }
@@ -426,6 +438,8 @@ export interface GeometryLab extends KleinInstrument<GeometryLabSnapshot, Geomet
   addWorkPlanePerpendicularToPlane(sourcePlaneId: string, through?: string | Vector3, style?: GeometryLabStyleOptions): string;
   addWorkPlanePerpendicularToLine(sourceEntityId: string, through?: string | Vector3, style?: GeometryLabStyleOptions): string;
   pointPlaneDistance(pointId: string, planeId: string): number;
+  addConstraint2D(constraint: GeometryConstraintDraft2D): string;
+  removeConstraint2D(ids: string | string[]): void;
   addDistanceMeasurement2D(firstPointId: string, secondPointId: string, label?: string): string;
   addLengthMeasurement2D(entityId: string, label?: string): string;
   addPointLineDistanceMeasurement2D(pointId: string, entityId: string, label?: string): string;

@@ -122,6 +122,8 @@ const DELTA_OPS: Record<GeometryLabDelta['op'], true> = {
   addWorkPlane: true,
   updateWorkPlane: true,
   deleteWorkPlane: true,
+  addConstraint2D: true,
+  deleteConstraint2D: true,
   addMeasurement2D: true,
   deleteMeasurement2D: true,
   addMeasurement: true,
@@ -930,8 +932,9 @@ function validateDeltaValue(value: unknown, path: string, context: ValidationCon
   else if (op === 'updateEntity') validateIdAndChanges(record, path, context, validateEntityChanges);
   else if (op === 'addWorkPlane') validateOpPayload(record, path, context, 'plane', validateWorkPlane);
   else if (op === 'updateWorkPlane') validateIdAndChanges(record, path, context, validateWorkPlaneChanges);
-  else if (op === 'deleteWorkPlane' || op === 'deleteMeasurement' || op === 'deleteMeasurement2D' || op === 'deleteNet' || op === 'delete') validateIdsOp(record, path, context);
+  else if (op === 'deleteWorkPlane' || op === 'deleteMeasurement' || op === 'deleteMeasurement2D' || op === 'deleteConstraint2D' || op === 'deleteNet' || op === 'delete') validateIdsOp(record, path, context);
   else if (op === 'addMeasurement2D') validateOpPayload(record, path, context, 'measurement', validateMeasurement2D);
+  else if (op === 'addConstraint2D') validateOpPayload(record, path, context, 'constraint', validateGeometryConstraint);
   else if (op === 'addMeasurement') validateOpPayload(record, path, context, 'measurement', validateMeasurement);
   else if (op === 'updateMeasurement') validateIdAndChanges(record, path, context, validateMeasurementChanges);
   else if (op === 'addNet') validateOpPayload(record, path, context, 'net', validateNet);

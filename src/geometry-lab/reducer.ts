@@ -420,6 +420,32 @@ function applyGeometryLabDeltaUnchecked(
         snapshot,
         delta.ids.map(id => ({ collection: 'workPlane', id })),
       );
+    case 'addConstraint2D':
+      assertGeometryLabIdAvailable(snapshot, delta.constraint.id, delta.op);
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: {
+            ...snapshot.scene.scene2d,
+            constraints: {
+              ...(snapshot.scene.scene2d.constraints ?? {}),
+              [delta.constraint.id]: delta.constraint,
+            },
+          },
+        },
+      };
+    case 'deleteConstraint2D': {
+      const remaining = { ...(snapshot.scene.scene2d.constraints ?? {}) };
+      for (const id of delta.ids) delete remaining[id];
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: { ...snapshot.scene.scene2d, constraints: remaining },
+        },
+      };
+    }
     case 'addMeasurement2D':
       assertGeometryLabIdAvailable(snapshot, delta.measurement.id, delta.op);
       return {

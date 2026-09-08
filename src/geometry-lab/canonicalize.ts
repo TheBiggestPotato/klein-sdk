@@ -3,6 +3,7 @@ import {
   geometryAngleBisectorPoint2D,
   geometryCircleTangentPoint2D,
   geometryCircumcircle2D,
+  constrainGeometryScene,
   geometryIntersectionPoint2D,
   lineEquationFrom2DPoints,
   normalizeGeometryPlaneEquation3D,
@@ -90,6 +91,18 @@ export function canonicalizeGeometryLabSnapshot(
   const next = cloneSnapshot(snapshot, options.reuseSurfaceMeshCaches === true);
   const legacySolidEdges = captureLegacySolidEdgeMappings(next.scene.scene3d);
   next.scene.scene2d = recomputeGeometryScene(next.scene.scene2d);
+  // Constraints have been storable and validated in the Lab from the start and
+  // were never enforced, so a fixed-length segment could be dragged to any
+  // length it liked. The solver is shared with the Geometry Calculator and caps
+  // its own relaxation passes, which is what keeps a contradictory figure from
+  // spinning on every edit.
+  //
+  // No changed-id hint is passed: canonicalization sees a finished snapshot,
+  // not the edit that produced it. The solver's fallback - prefer the second
+  // point of a pair, then the first - is deterministic, which is what a
+  // canonical form needs, though it means the Lab does not yet favour holding
+  // still the point a user is dragging the way the Calculator does.
+  next.scene.scene2d = constrainGeometryScene(next.scene.scene2d, []);
   assertRecomputableScene2D(next);
 
   canonicalizeMeasurements2D(next.scene.scene2d);

@@ -16,6 +16,7 @@ import type {
 } from '../core/index.js';
 import {
   buildAngleBisector2D,
+  geometryConstraintDependencies,
   buildCircleByCenterPoint2D,
   buildCircleThroughPoints2D,
   buildConstructedLine2D,
@@ -27,6 +28,7 @@ import {
 } from '../geometry-core/index.js';
 import type {
   AngleEntity,
+  GeometryConstraint,
   GeometryConstruction,
   GeometryConstructionResult,
   GeometryEntity,
@@ -46,6 +48,7 @@ import type {
   CurveEntity3D,
   EquationSurfaceInput3D,
   GeometryCameraPreset3D,
+  GeometryConstraintDraft2D,
   GeometryEntity3D,
   GeometryLab,
   GeometryLabAppState,
@@ -1175,6 +1178,35 @@ class GeometryLabInstrument implements GeometryLab {
    * canonicalization compute the value, which is what keeps the number correct
    * when the figure moves under it.
    */
+  /**
+   * Constrains the 2D figure.
+   *
+   * <p>The Lab has been able to *store* constraints since the model was written
+   * - `scene2d.constraints` is validated, persisted and cascaded - and nothing
+   * ever enforced them, so a segment declared to be five units long could be
+   * dragged to any length at all. The solver is shared with the Geometry
+   * Calculator and runs during canonicalization, so a constraint holds however
+   * the figure is edited, not only through the method that set it.
+   */
+  addConstraint2D(constraint: GeometryConstraintDraft2D): string {
+    this.#assertWritable();
+    for (const id of geometryConstraintDependencies({ ...constraint, id: 'draft' } as GeometryConstraint)) {
+      if (!this.#snapshot.scene.scene2d.points[id] && !this.#snapshot.scene.scene2d.entities[id]) {
+        throw new KleinSdkError('invalid_constraint_reference', `2D object "${id}" does not exist.`);
+      }
+    }
+    const owned = { ...constraint, id: this.#ids.next('con2') } as GeometryConstraint;
+    this.#commitDelta({ op: 'addConstraint2D', constraint: owned });
+    return owned.id;
+  }
+
+  removeConstraint2D(ids: string | string[]): void {
+    this.#assertWritable();
+    const unique = [...new Set(typeof ids === 'string' ? [ids] : ids)].filter(Boolean);
+    if (!unique.length) return;
+    this.#commitDelta({ op: 'deleteConstraint2D', ids: unique });
+  }
+
   addDistanceMeasurement2D(firstPointId: string, secondPointId: string, label = 'distance'): string {
     return this.#addMeasurement2D({ kind: 'pointDistance', firstPointId, secondPointId }, 'length', 'u', label);
   }

@@ -402,6 +402,390 @@ export function geometryConstructionSourceIds(construction: GeometryConstruction
 }
 
 /* -------------------------------------------------------------------------- */
+/* Constraint solving                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How many relaxation passes a constrained scene is given per edit.
+ *
+ * <p>Constraints are enforced by repeatedly nudging points until they stop
+ * moving, which is the classic way an interactive geometry tool loses its frame
+ * budget: an over-constrained or contradictory figure never converges, and an
+ * uncapped loop spins on every drag. Six passes settle every satisfiable figure
+ * this model can express, and a figure that has not settled by then is reported
+ * as it stands rather than chased.
+ */
+const CONSTRAINT_SOLVER_ITERATIONS = 6;
+
+/**
+ * Applies every enabled constraint until the scene stops changing.
+ *
+ * <p>Moved here from the Geometry Calculator, which was its only home, so the
+ * Lab can enforce the constraints it has always been able to *store*. Nothing
+ * in it reads a Calculator-specific field, so it generalises over any
+ * `GeometryScene` unchanged.
+ *
+ * <p>`changedIds` is what the edit touched, and it decides which end of a
+ * constraint gives way: a fixed-length segment whose first point the user just
+ * dragged moves its second point, not the one under the cursor.
+ */
+export function constrainGeometryScene<T extends GeometryScene>(
+  scene: T,
+  changedIds: Iterable<string>,
+): T {
+  const constraints = Object.values(scene.constraints ?? {}).filter(constraint => constraint.enabled !== false);
+  if (!constraints.length) return scene;
+
+  const changedSet = new Set(changedIds);
+  let next = scene;
+  for (let iteration = 0; iteration < CONSTRAINT_SOLVER_ITERATIONS; iteration += 1) {
+    let changed = false;
+    for (const constraint of constraints) {
+      const before = next;
+      next = enforceGeometryConstraint(next, constraint, changedSet);
+      if (next !== before) changed = true;
+    }
+    if (!changed) break;
+    next = recomputeGeometryScene(next);
+  }
+  return next;
+}
+
+function enforceGeometryConstraint<T extends GeometryScene>(
+  scene: T,
+  constraint: GeometryConstraint,
+  changedSet: Set<string>,
+): T {
+  switch (constraint.kind) {
+    case 'fixedLength':
+      return enforceFixedLengthConstraint(scene, constraint.pointIds, constraint.length, changedSet);
+    case 'fixedAngle':
+      return enforceFixedAngleConstraint(scene, constraint.pointIds, constraint.degrees, changedSet);
+    case 'parallel':
+      return enforceDirectionConstraint(scene, constraint.entityIds, changedSet, false);
+    case 'perpendicular':
+      return enforceDirectionConstraint(scene, constraint.entityIds, changedSet, true);
+    case 'equalLength':
+      return enforceEqualLengthConstraint(scene, constraint.segments, changedSet);
+    case 'equalRadius':
+      return enforceEqualRadiusConstraint(scene, constraint.circleIds, changedSet);
+  }
+}
+
+function enforceFixedLengthConstraint<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string],
+  length: number,
+  changedSet: Set<string>,
+): T {
+  return geometryAdjustSegmentLength(scene, pointIds, length, changedSet);
+}
+
+function enforceEqualLengthConstraint<T extends GeometryScene>(
+  scene: T,
+  segments: [[string, string], [string, string]],
+  changedSet: Set<string>,
+): T {
+  const [firstIds, secondIds] = segments;
+  const firstLength = geometrySegmentLength(scene, firstIds);
+  const secondLength = geometrySegmentLength(scene, secondIds);
+  if (!Number.isFinite(firstLength) || !Number.isFinite(secondLength) || firstLength <= 0 || secondLength <= 0) {
+    return scene;
+  }
+  const firstChanged = idsIntersect(firstIds, changedSet);
+  const secondChanged = idsIntersect(secondIds, changedSet);
+  if (firstChanged && !secondChanged) return geometryAdjustSegmentLength(scene, firstIds, secondLength, changedSet);
+  return geometryAdjustSegmentLength(scene, secondIds, firstLength, changedSet);
+}
+
+function enforceFixedAngleConstraint<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string, string],
+  degrees: number,
+  changedSet: Set<string>,
+): T {
+  const [firstId, vertexId, secondId] = pointIds;
+  const first = constraintPoint2D(scene, firstId);
+  const vertex = constraintPoint2D(scene, vertexId);
+  const second = constraintPoint2D(scene, secondId);
+  if (!first || !vertex || !second || !Number.isFinite(degrees)) return scene;
+
+  const secondEditable = isEditablePoint(scene, secondId);
+  const firstEditable = isEditablePoint(scene, firstId);
+  const moveSecond = secondEditable && (
+    changedSet.has(secondId)
+    || changedSet.has(vertexId)
+    || !changedSet.has(firstId)
+    || !firstEditable
+  );
+
+  if (moveSecond) {
+    return geometrySetPointOnAngle(scene, {
+      moveId: secondId,
+      anchor: vertex,
+      base: first,
+      current: second,
+      degrees,
+    });
+  }
+  if (firstEditable) {
+    return geometrySetPointOnAngle(scene, {
+      moveId: firstId,
+      anchor: vertex,
+      base: second,
+      current: first,
+      degrees,
+    });
+  }
+  return scene;
+}
+
+function enforceDirectionConstraint<T extends GeometryScene>(
+  scene: T,
+  entityIds: [string, string],
+  changedSet: Set<string>,
+  perpendicular: boolean,
+): T {
+  const firstIds = geometryLineConstraintPointIds(scene, entityIds[0]);
+  const secondIds = geometryLineConstraintPointIds(scene, entityIds[1]);
+  if (!firstIds || !secondIds) return scene;
+
+  const firstChanged = idsIntersect([...firstIds, entityIds[0]], changedSet);
+  const secondChanged = idsIntersect([...secondIds, entityIds[1]], changedSet);
+  const targetIds = firstChanged && !secondChanged ? firstIds : secondIds;
+  const sourceIds = targetIds === firstIds ? secondIds : firstIds;
+  const sourceDirection = segmentDirection(scene, sourceIds);
+  if (!sourceDirection) return scene;
+  const direction = perpendicular
+    ? { x: -sourceDirection.y, y: sourceDirection.x }
+    : sourceDirection;
+  return adjustLineDirection(scene, targetIds, direction, changedSet);
+}
+
+function enforceEqualRadiusConstraint<T extends GeometryScene>(
+  scene: T,
+  circleIds: [string, string],
+  changedSet: Set<string>,
+): T {
+  const first = scene.entities[circleIds[0]];
+  const second = scene.entities[circleIds[1]];
+  if (first?.kind !== 'circle' || second?.kind !== 'circle') return scene;
+  if (!Number.isFinite(first.radius) || !Number.isFinite(second.radius) || first.radius <= 0 || second.radius <= 0) {
+    return scene;
+  }
+
+  const firstChanged = idsIntersect([circleIds[0], ...circleConstraintPointIds(first)], changedSet);
+  const secondChanged = idsIntersect([circleIds[1], ...circleConstraintPointIds(second)], changedSet);
+  if (firstChanged && !secondChanged) return geometrySetCircleRadius(scene, first.id, second.radius);
+  return geometrySetCircleRadius(scene, second.id, first.radius);
+}
+
+export function geometryAdjustSegmentLength<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string],
+  length: number,
+  changedSet: Set<string>,
+): T {
+  if (!Number.isFinite(length) || length <= 0) return scene;
+  const moveId = chooseEditablePointToMove(scene, pointIds, changedSet);
+  if (!moveId) return scene;
+  const anchorId = pointIds[0] === moveId ? pointIds[1] : pointIds[0];
+  const move = constraintPoint2D(scene, moveId);
+  const anchor = constraintPoint2D(scene, anchorId);
+  if (!move || !anchor) return scene;
+  const direction = normalizeVector2D({ x: move.x - anchor.x, y: move.y - anchor.y }) ?? { x: 1, y: 0 };
+  return geometrySetPointPosition(scene, moveId, {
+    x: anchor.x + direction.x * length,
+    y: anchor.y + direction.y * length,
+  });
+}
+
+function adjustLineDirection<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string],
+  direction: Vector2,
+  changedSet: Set<string>,
+): T {
+  const normalized = normalizeVector2D(direction);
+  if (!normalized) return scene;
+  const moveId = chooseEditablePointToMove(scene, pointIds, changedSet);
+  if (!moveId) return scene;
+  const anchorId = pointIds[0] === moveId ? pointIds[1] : pointIds[0];
+  const move = constraintPoint2D(scene, moveId);
+  const anchor = constraintPoint2D(scene, anchorId);
+  if (!move || !anchor) return scene;
+  const length = Math.max(distance2D(move, anchor), 1);
+  const currentDirection = normalizeVector2D({ x: move.x - anchor.x, y: move.y - anchor.y });
+  const sign = currentDirection && dot(currentDirection, normalized) < 0 ? -1 : 1;
+  return geometrySetPointPosition(scene, moveId, {
+    x: anchor.x + normalized.x * sign * length,
+    y: anchor.y + normalized.y * sign * length,
+  });
+}
+
+export function geometrySetPointOnAngle<T extends GeometryScene>(
+  scene: T,
+  options: {
+    moveId: string;
+    anchor: Vector2;
+    base: Vector2;
+    current: Vector2;
+    degrees: number;
+  },
+): T {
+  const baseDirection = normalizeVector2D({
+    x: options.base.x - options.anchor.x,
+    y: options.base.y - options.anchor.y,
+  });
+  if (!baseDirection) return scene;
+  const radius = Math.max(distance2D(options.current, options.anchor), 1);
+  const baseAngle = Math.atan2(baseDirection.y, baseDirection.x);
+  const target = ((options.degrees % 360) * Math.PI) / 180;
+  const currentAngle = Math.atan2(options.current.y - options.anchor.y, options.current.x - options.anchor.x);
+  const first = baseAngle + target;
+  const second = baseAngle - target;
+  const angle = angularDistance(currentAngle, first) <= angularDistance(currentAngle, second) ? first : second;
+  return geometrySetPointPosition(scene, options.moveId, {
+    x: options.anchor.x + Math.cos(angle) * radius,
+    y: options.anchor.y + Math.sin(angle) * radius,
+  });
+}
+
+export function geometrySetCircleRadius<T extends GeometryScene>(
+  scene: T,
+  circleId: string,
+  radius: number,
+): T {
+  if (!Number.isFinite(radius) || radius <= 0) return scene;
+  const circle = scene.entities[circleId];
+  if (circle?.kind !== 'circle' || circle.locked) return scene;
+
+  if (circle.construction?.kind === 'circleCenterPoint') {
+    const center = constraintPoint2D(scene, circle.construction.centerPointId);
+    const radiusPoint = constraintPoint2D(scene, circle.construction.radiusPointId);
+    if (!center || !radiusPoint || radiusPoint.locked) return scene;
+    const direction = normalizeVector2D({ x: radiusPoint.x - center.x, y: radiusPoint.y - center.y }) ?? { x: 1, y: 0 };
+    return geometrySetPointPosition(scene, radiusPoint.id, {
+      x: center.x + direction.x * radius,
+      y: center.y + direction.y * radius,
+    });
+  }
+
+  if (circle.construction?.kind === 'circleThroughPoints') return scene;
+  if (Math.abs(circle.radius - radius) <= 1e-9) return scene;
+  return {
+    ...scene,
+    entities: {
+      ...scene.entities,
+      [circle.id]: { ...circle, radius },
+    },
+  };
+}
+
+export function geometrySetPointPosition<T extends GeometryScene>(
+  scene: T,
+  pointId: string,
+  position: Vector2,
+): T {
+  const point = constraintPoint2D(scene, pointId);
+  if (!point || point.locked || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return scene;
+  if (Math.abs(point.x - position.x) <= 1e-9 && Math.abs(point.y - position.y) <= 1e-9) return scene;
+  return {
+    ...scene,
+    points: {
+      ...scene.points,
+      [point.id]: { ...point, x: position.x, y: position.y },
+    },
+  };
+}
+
+function chooseEditablePointToMove<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string],
+  changedSet: Set<string>,
+): string | null {
+  const changed = pointIds.filter(pointId => changedSet.has(pointId) && isEditablePoint(scene, pointId));
+  if (changed.length > 0) return changed[changed.length - 1] ?? null;
+  if (isEditablePoint(scene, pointIds[1])) return pointIds[1];
+  if (isEditablePoint(scene, pointIds[0])) return pointIds[0];
+  return null;
+}
+
+function isEditablePoint<T extends GeometryScene>(scene: T, pointId: string): boolean {
+  const point = constraintPoint2D(scene, pointId);
+  return Boolean(point && !point.locked);
+}
+
+export function geometryLineConstraintPointIds<T extends GeometryScene>(scene: T, entityId: string): [string, string] | null {
+  const entity = scene.entities[entityId];
+  if (!entity) return null;
+  if (
+    entity.kind === 'segment'
+    || entity.kind === 'line'
+    || entity.kind === 'ray'
+    || entity.kind === 'vector'
+  ) {
+    return entity.pointIds;
+  }
+  return null;
+}
+
+export function geometrySegmentLength<T extends GeometryScene>(scene: T, pointIds: [string, string]): number {
+  const first = constraintPoint2D(scene, pointIds[0]);
+  const second = constraintPoint2D(scene, pointIds[1]);
+  return first && second ? distance2D(first, second) : NaN;
+}
+
+function segmentDirection<T extends GeometryScene>(scene: T, pointIds: [string, string]): Vector2 | null {
+  const first = constraintPoint2D(scene, pointIds[0]);
+  const second = constraintPoint2D(scene, pointIds[1]);
+  return first && second ? normalizeVector2D({ x: second.x - first.x, y: second.y - first.y }) : null;
+}
+
+function circleConstraintPointIds<T extends GeometryScene>(circle: CircleEntity): string[] {
+  const ids = [circle.centerId];
+  if (circle.construction?.kind === 'circleCenterPoint') ids.push(circle.construction.radiusPointId);
+  if (circle.construction?.kind === 'circleThroughPoints') ids.push(...circle.construction.pointIds);
+  return ids;
+}
+
+function idsIntersect<T extends GeometryScene>(ids: Iterable<string>, changedSet: Set<string>): boolean {
+  for (const id of ids) {
+    if (changedSet.has(id)) return true;
+  }
+  return false;
+}
+
+/** Dot product of two 2D vectors. */
+function dot(first: Vector2, second: Vector2): number {
+  return first.x * second.x + first.y * second.y;
+}
+
+/** Smallest absolute angle between two headings, in radians. */
+function angularDistance(first: number, second: number): number {
+  return Math.abs(normalizeAngleDelta(first - second));
+}
+
+/**
+ * Wraps an angle difference into (-pi, pi], so 359 and 1 degrees are 2 apart.
+ * Copied verbatim from the Calculator rather than rewritten with a modulo: this
+ * extraction is meant to preserve behaviour exactly, and the two differ at the
+ * boundary where the difference is precisely pi.
+ */
+function normalizeAngleDelta(delta: number): number {
+  let result = delta;
+  while (result <= -Math.PI) result += Math.PI * 2;
+  while (result > Math.PI) result -= Math.PI * 2;
+  return result;
+}
+
+/** The 2D point with this id, or undefined when it is missing or 3D. */
+function constraintPoint2D<T extends GeometryScene>(scene: T, id: string): GeometryPoint2D | undefined {
+  const point = scene.points[id];
+  return isGeometryPoint2D(point) ? point : undefined;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Shared 2D construction builders                                            */
 /* -------------------------------------------------------------------------- */
 

@@ -15,7 +15,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 0 - Performance foundation | 10 | 12 | **Complete.** 0.3 and 0.7 closed on evidence as not worth doing; 0.12 added and landed |
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
 | 2 - Close the 2D gap | 4 | 5 | 2.2-2.5 landed; 2.1 half done - the Calculator's own migration onto the shared builders is the last piece |
-| 3 - Transformations and constraints | 0 | 3 | Blocked on 1.1-1.2 |
+| 3 - Transformations and constraints | 2 | 3 | 3.2 and 3.3 landed; 3.1 transformations open |
 | 4 - The learning layer | 0 | 6 | 4.1 can start any time |
 | 5 - Accessibility and output | 0 | 5 | |
 | 6 - Mathematical depth | 0 | 5 | |
@@ -787,14 +787,33 @@ value is ever displayed as if it were live.
   the Phase 1 recompute. The tools `scale`, `rotate`, `stamp` and `cut` are
   already declared in `GeometryLabTool` with no implementation behind them, and
   `GEOMETRY_LAB_EXERCISES.md` already asks students to mirror a figure by hand.
-- [ ] **3.2 Constraint solving.** `GeometryConstraint` is modelled in
-  `geometry-core`, `enforceGeometryConstraint` exists at
-  `src/geometry/index.ts:6348`, the Lab persists and validates
-  `scene2d.constraints`, and nothing solves them. Wire the existing local
-  enforcement in. **Cap iterations per frame** and report non-convergence
-  rather than spinning - an uncapped relaxation loop is the classic way a
-  geometry tool drops frames.
-- [ ] **3.3 Perf gate.** Benchmark a twenty-constraint figure under drag.
+- [x] **3.2 Constraint solving.** `scene2d.constraints` was typed, validated,
+  persisted and cascaded from the start, and nothing ever enforced it - a
+  segment declared five units long could be dragged to any length, so a
+  constraint was a note in the file rather than a fact about the figure.
+
+  **Nothing needed writing.** `constrainGeometryScene` already existed in the
+  Calculator, already capped at six relaxation passes, and read no
+  Calculator-specific field - so it moved to geometry-core generic over any
+  `GeometryScene`, and both instruments share it. The Calculator's own
+  behaviour is unchanged, verified by a differential over **114 snapshots
+  across nine scenarios** covering every constraint kind, an over-constrained
+  figure, a disabled constraint and a locked point.
+
+  The Lab also had no way to *add* one: no delta, no method. Added
+  `addConstraint2D` / `removeConstraint2D` and their deltas. Enforcement lives
+  in canonicalization rather than in the method, so a constraint holds however
+  the edit arrives - including a raw delta from a collaborating peer.
+
+  One honest limitation: canonicalization sees a finished snapshot, not the edit
+  that produced it, so no changed-id hint is passed. The solver's deterministic
+  fallback applies, which means the Lab does not yet prefer to hold still the
+  point a user is dragging the way the Calculator does. Deterministic is what a
+  canonical form needs; the nicety is not yet there.
+- [x] **3.3 Perf gate.** `drag-20-constraints` drags one end of a chain held by
+  twenty fixed-length constraints: **0.27 ms** against the 4 ms budget. The
+  relaxation loop is the classic way a geometry tool loses its frame budget, so
+  this case exists to keep the iteration cap honest.
 
 ## Phase 4 - the learning layer
 
