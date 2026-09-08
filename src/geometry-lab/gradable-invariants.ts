@@ -239,6 +239,19 @@ function figureSize(points: readonly NamedPoint[]): number {
   return Math.hypot(maxX - minX, maxY - minY);
 }
 
+/**
+ * What a point is called in an invariant id: a label if the child gave one,
+ * because `equal-segments:AB,CD` is what a teacher writes in a mark scheme and
+ * an internal id is not.
+ *
+ * <p>Shared with goal checking, which has to split these names back out of a
+ * run-together `AB` and would read the wrong figure if it named points
+ * differently from the reporter.
+ */
+export function geometryInvariantPointName(point: GeometryPoint): string {
+  return point.label && point.label.trim() !== '' ? point.label.trim() : point.id;
+}
+
 function namedPoints(points: Record<string, GeometryPoint>): NamedPoint[] {
   return Object.values(points)
     .filter((point): point is GeometryPoint & { x: number; y: number } =>
@@ -247,9 +260,7 @@ function namedPoints(points: Record<string, GeometryPoint>): NamedPoint[] {
       && Number.isFinite((point as { y?: number }).y))
     .map((point) => ({
       id: point.id,
-      // A label if the child gave one, because `equal-segments:AB,CD` is what a
-      // teacher writes in a mark scheme and an internal id is not.
-      name: point.label && point.label.trim() !== '' ? point.label.trim() : point.id,
+      name: geometryInvariantPointName(point),
       x: point.x,
       y: point.y,
     }))

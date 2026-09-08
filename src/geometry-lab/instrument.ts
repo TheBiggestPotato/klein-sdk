@@ -130,8 +130,15 @@ import {
 } from './solids.js';
 
 export { assertGeometryLabInvariants, getGeometryLabInvariantIssues } from './invariants.js';
+import { computeGeometryInvariants } from './gradable-invariants.js';
+import type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
+import { checkGeometryGoal } from './goal-check.js';
+import type { GeometryGoalCheck } from './goal-check.js';
+
 export { computeGeometryInvariants, RELATIVE_TOLERANCE } from './gradable-invariants.js';
 export type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
+export { checkGeometryGoal } from './goal-check.js';
+export type { GeometryGoalCheck } from './goal-check.js';
 export { compactGeometryLabDelta, compactGeometryLabSnapshot } from './persistence.js';
 export { compileEquationSurface3D } from './equations.js';
 export {
@@ -539,6 +546,19 @@ class GeometryLabInstrument implements GeometryLab {
    */
   peekSnapshot(): Readonly<GeometryLabSnapshot> {
     return freezeGeometryLabSnapshotShell(this.#snapshot);
+  }
+
+  /** What the figure establishes, as facts a mark scheme can name. */
+  getInvariants(): GeometryInvariantReport {
+    return computeGeometryInvariants(this.#snapshot);
+  }
+
+  /**
+   * Checks the figure against the facts it was asked to establish, and says
+   * which of them are absent - which is the half a hint is built from.
+   */
+  checkGoal(targetInvariants: readonly GeometryInvariantId[]): GeometryGoalCheck {
+    return checkGeometryGoal(this.#snapshot, targetInvariants, this.getInvariants());
   }
 
   subscribeDelta(listener: (delta: GeometryLabDelta, meta: DeltaMeta) => void): () => void {

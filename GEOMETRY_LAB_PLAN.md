@@ -16,7 +16,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
 | 2 - Close the 2D gap | 5 | 5 | Complete |
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
-| 4 - The learning layer | 0 | 6 | 4.1 can start any time |
+| 4 - The learning layer | 1 | 6 | 4.1 landed; 4.2 next |
 | 5 - Accessibility and output | 0 | 5 | |
 | 6 - Mathematical depth | 0 | 5 | |
 
@@ -869,12 +869,59 @@ value is ever displayed as if it were live.
 Highest pedagogical return per unit of work, and 4.1 is the smallest diff in
 this document.
 
-- [ ] **4.1 Goal checking.** `checkGeometryGoal(snapshot, targetInvariants)`
-  returning `{ satisfied, missing, extra }`. This one function turns the
-  existing invariant reporter from a marker into a tutor: "you were asked for a
-  perpendicular bisector; you have `equal-segments:AM,MB` but not
-  `perpendicular:AB,l`". Expose it on `GeometryLab` and consume it in
-  `src/assessment`, which today has no geometry-specific scoring at all.
+- [x] **4.1 Goal checking.** `checkGeometryGoal(snapshot, targetInvariants)`
+  returning `{ satisfied, met, missing, extra, incomplete, relativeTolerance }`,
+  on `GeometryLab` as `checkGoal`, with `getInvariants` alongside it. This one
+  function turns the existing invariant reporter from a marker into a tutor:
+  "you have `equal-segments:AM,BM`, you have not made `AB` and `CD`
+  perpendicular".
+
+  It looks like a set difference and is not, for two reasons that are most of
+  the code:
+
+  - **A goal is written by a person.** A mark scheme says
+    `equal-segments:MB,AM`; the reporter emits `equal-segments:AM,BM`. Both name
+    one fact. The reporter's spellings are canonical only by accident of how its
+    loops are nested, so both sides go through the same canonicaliser - which
+    has to know, per kind, which arguments are unordered and which are point
+    names run together with no separator. That grammar is ambiguous in general
+    (with points `B`, `C`, `BC` and `CA` in one figure, `BCA` is either `B-CA`
+    or `BC-A`), so a name that reads two ways is **refused and compared
+    literally** rather than guessed. Guessing would credit the wrong segment.
+  - **Absent is not false.** The reporter bounds its own work and says so. A
+    fact that fell off a truncated report has not been checked, and calling it
+    missing would send a child to fix something already right, so the result
+    carries `incomplete`. Truncation can only hide facts, so a goal with nothing
+    missing is satisfied whatever else was skipped.
+
+  `extra` is scoped to relations between the objects the goal itself names. Any
+  figure satisfies dozens of incidental relations and a tutor reciting them is
+  noise; a relation between the very points the exercise is about is usually how
+  the child got there.
+
+  Cost: linear in the report (bounded at 200 facts) and in the goal, about
+  0.6 us per invariant - 0.05 ms on a 78-fact figure, 0.10 ms on a 152-fact one,
+  and 8% of the reporter's own scan at its 24-point cap. It takes an
+  already-computed report as an optional third argument, because the scan is the
+  expensive half and a caller holding one must not pay twice. The first version
+  parsed every id twice, once for its canonical spelling and once for the
+  objects it names, which cost more than the scan it sits on; both now come from
+  one parse behind a memo.
+
+  **Not done: "consume it in `src/assessment`", because that module forbids
+  it.** `src/assessment/index.ts` says it "intentionally contains no delivery
+  engine, proctoring runtime, scoring logic, or answer keys", and this is not
+  just a comment - `LEARNER_SAFE_FORBIDDEN_FIELDS` maps `answer`, `scoring`,
+  `rubric`, `markingScheme` and thirty more to `never` on every item type, and
+  `learner-safe-contract.test.ts` asserts at type level that they cannot be
+  assigned. A target invariant set is an answer key. The module has no
+  authoring-side item type to put one on, only `LearnerSafeAssessmentItemV1`.
+  The split the invariant reporter already documents is the right one and is
+  the one now implemented: the instrument states which facts hold and which are
+  absent, and the scorer - outside this SDK - holds the key and calls
+  `checkGeometryGoal`. Giving assessment a geometry answer key needs an
+  authoring-side contract that does not exist yet, and that is a decision about
+  the assessment module rather than about the Lab.
 - [ ] **4.2 Construction protocol.** A numbered, labelled, replayable step list
   built from the `construction` provenance already in the model. `history.ts`
   stores compare-and-set JSON patches for undo and collaboration, and
