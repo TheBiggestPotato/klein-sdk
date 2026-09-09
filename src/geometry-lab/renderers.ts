@@ -1,7 +1,16 @@
 import { KleinSdkError } from '../core/index.js';
+import {
+  parsePdfColor,
+  pdfDocument,
+  pdfFillColor,
+  pdfNumber,
+  pdfStrokeColor,
+  pdfText,
+} from '../export/index.js';
 import { geometryLabFigureSummary } from './describe.js';
 import { geometryConstructionProtocol } from './protocol.js';
 import { KLEIN_UI_FONT_STACK } from '../theme/index.js';
+import { formatMathNode, parseMath } from '../math/index.js';
 import type { ExportOptions, Vector2, Vector3 } from '../core/index.js';
 import type { GeometryPoint3D } from '../geometry-core/index.js';
 import {
@@ -126,11 +135,11 @@ interface PolylineStyle3D {
  * clipped average view depth; geometrically intersecting faces are not split at
  * their intersection.
  */
-export function renderGeometryLabSvg3D(
+function collectFigure3D(
   snapshot: GeometryLabSnapshot,
-  options: Partial<ExportOptions> = {},
-  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
-): string {
+  options: Partial<ExportOptions>,
+  complexityLimits: Partial<GeometryLabComplexityLimits>,
+): CollectedFigure {
   const limits = resolveGeometryLabComplexityLimits(complexityLimits);
   assertGeometryLabSnapshotComplexity(snapshot, limits);
   assertGeometryLabExportRequestComplexity(
@@ -253,23 +262,20 @@ export function renderGeometryLabSvg3D(
     return depthOrder !== 0 ? depthOrder : first.sequence - second.sequence;
   });
 
-  const builder = new BoundedSvgOutput(limits.maxExportBytes);
-  builder.append(svgRoot(
+  return {
+    snapshot,
+    limits,
     width,
     height,
-    'Klein 3D calculator scene',
-    describe ? geometryLabFigureSummary(snapshot) : null,
+    background: String(background),
+    primitives,
+    label: 'Klein 3D calculator scene',
     describe,
-  ));
-  builder.append(`<rect width="100%" height="100%" fill="${escapeXml(String(background))}"/>`);
-  builder.append(`<g stroke-linecap="round" stroke-linejoin="round" font-family="${KLEIN_UI_FONT_STACK.replace(/"/g, '&quot;')}">`);
-  const emitted = new Set<string>();
-  for (const primitive of primitives) builder.append(renderPrimitive(primitive, focusable, emitted));
-  if (options.includeMeasurements !== false) builder.append(renderMeasurementsSvg(snapshot, width));
-  builder.append('</g></svg>');
-  const output = builder.toString();
-  assertGeometryLabExportOutputComplexity(output, limits);
-  return output;
+    focusable,
+    // The 3D view paints a panel of measurements over the scene; the 2D one
+    // renders them into the figure itself.
+    measurementPanel: options.includeMeasurements !== false,
+  };
 }
 
 class BoundedSvgOutput {
@@ -899,11 +905,11 @@ const DEFAULT_FILL_2D = '#76abae';
  * points and labels on top, so that a point is never buried under the polygon
  * it defines.
  */
-export function renderGeometryLabSvg2D(
+function collectFigure2D(
   snapshot: GeometryLabSnapshot,
-  options: Partial<ExportOptions> = {},
-  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
-): string {
+  options: Partial<ExportOptions>,
+  complexityLimits: Partial<GeometryLabComplexityLimits>,
+): CollectedFigure {
   const limits = resolveGeometryLabComplexityLimits(complexityLimits);
   assertGeometryLabSnapshotComplexity(snapshot, limits);
   assertGeometryLabExportRequestComplexity({ ...options, format: 'svg' }, snapshot, limits);
@@ -1105,20 +1111,363 @@ export function renderGeometryLabSvg2D(
     return depthOrder !== 0 ? depthOrder : first.sequence - second.sequence;
   });
 
-  const builder = new BoundedSvgOutput(limits.maxExportBytes);
-  builder.append(svgRoot(
+  return {
+    snapshot,
+    limits,
     width,
     height,
-    'Klein 2D geometry scene',
-    describe ? geometryLabFigureSummary(snapshot) : null,
+    background: String(background),
+    primitives,
+    label: 'Klein 2D geometry scene',
     describe,
+    focusable,
+    measurementPanel: false,
+  };
+}
+
+/**
+ * A figure reduced to the four shapes every backend knows how to draw, with
+ * everything a serializer needs to write it out.
+ *
+ * <p>Separated from the writing so that a second format is a second serializer
+ * rather than a second renderer. A PDF drawn from its own reading of the scene
+ * would drift from the SVG the first time either changed, and "the print does
+ * not match the screen" is a bug nobody can reproduce from a description.
+ */
+interface CollectedFigure {
+  snapshot: GeometryLabSnapshot;
+  limits: GeometryLabComplexityLimits;
+  width: number;
+  height: number;
+  background: string;
+  primitives: SvgPrimitive[];
+  label: string;
+  describe: boolean;
+  focusable: boolean;
+  measurementPanel: boolean;
+}
+
+/** Renders the 2D scene as SVG. */
+export function renderGeometryLabSvg2D(
+  snapshot: GeometryLabSnapshot,
+  options: Partial<ExportOptions> = {},
+  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
+): string {
+  return serializeFigureSvg(collectFigure2D(snapshot, options, complexityLimits));
+}
+
+/** Renders the 3D scene as SVG. */
+export function renderGeometryLabSvg3D(
+  snapshot: GeometryLabSnapshot,
+  options: Partial<ExportOptions> = {},
+  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
+): string {
+  return serializeFigureSvg(collectFigure3D(snapshot, options, complexityLimits));
+}
+
+/**
+ * Which scene a figure is: the one it is looking at, unless that is the plane
+ * and the plane is empty.
+ *
+ * <p>Lives here rather than in the instrument because every backend has to
+ * agree about it - a PDF of the 3D scene beside an SVG of the 2D one would be
+ * two pictures of different figures.
+ */
+export function rendersTwoDimensionalScene(snapshot: GeometryLabSnapshot): boolean {
+  if (snapshot.appState.activeView === '3d') return false;
+  const scene2d = snapshot.scene.scene2d;
+  return Object.keys(scene2d.points).length > 0 || Object.keys(scene2d.entities).length > 0;
+}
+
+/** Renders the figure as a one-page PDF. */
+export function renderGeometryLabPdf(
+  snapshot: GeometryLabSnapshot,
+  options: Partial<ExportOptions> = {},
+  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
+): string {
+  const figure = rendersTwoDimensionalScene(snapshot)
+    ? collectFigure2D(snapshot, options, complexityLimits)
+    : collectFigure3D(snapshot, options, complexityLimits);
+  const output = pdfDocument(serializeFigurePdf(figure), { width: figure.width, height: figure.height });
+  assertGeometryLabExportOutputComplexity(output, figure.limits);
+  return output;
+}
+
+/**
+ * The same primitives, written as PDF operators.
+ *
+ * <p>PDF puts its origin at the bottom left and SVG at the top left, so every
+ * y is flipped once here rather than at each use. Everything else is a direct
+ * translation - `m`/`l` for a path, `f`/`S` to fill or stroke it - because the
+ * primitives were already reduced to the four shapes both formats have.
+ */
+function serializeFigurePdf(figure: CollectedFigure): string {
+  const flip = (point: Vector2): Vector2 => ({ x: point.x, y: figure.height - point.y });
+  const commands: string[] = [];
+
+  if (figure.background !== 'transparent') {
+    commands.push('q', pdfFillColor(figure.background), `0 0 ${pdfNumber(figure.width)} ${pdfNumber(figure.height)} re f`, 'Q');
+  }
+
+  for (const primitive of figure.primitives) {
+    if (primitive.kind === 'polygon' || primitive.kind === 'polyline') {
+      const points = primitive.points.map(flip);
+      const first = points[0];
+      if (!first || points.length < 2) continue;
+      const path = [`${pdfNumber(first.x)} ${pdfNumber(first.y)} m`];
+      for (const point of points.slice(1)) path.push(`${pdfNumber(point.x)} ${pdfNumber(point.y)} l`);
+      if (primitive.kind === 'polygon') {
+        commands.push(
+          'q',
+          pdfFillColor(blendOntoBackground(primitive.fill, primitive.fillOpacity, figure.background)),
+          pdfStrokeColor(primitive.stroke),
+          `${pdfNumber(primitive.strokeWidth)} w`,
+          ...path,
+          'h B',
+          'Q',
+        );
+      } else {
+        commands.push('q', pdfStrokeColor(primitive.stroke), `${pdfNumber(primitive.strokeWidth)} w`, ...path, 'S', 'Q');
+      }
+      continue;
+    }
+    if (primitive.kind === 'text') {
+      commands.push(pdfText(primitive.text, { x: primitive.point.x + 4, y: primitive.point.y - 4 }, primitive.color, { width: figure.width, height: figure.height }));
+      continue;
+    }
+    const centre = flip(primitive.point);
+    // A dot, as four Bezier arcs - PDF has no circle operator, and a square
+    // where the screen shows a disc would be a different drawing.
+    commands.push('q', pdfFillColor(primitive.color), ...pdfCircle(centre, 3.5), 'f', 'Q');
+    if (primitive.label !== undefined) {
+      commands.push(pdfText(primitive.label, { x: primitive.point.x + 5, y: primitive.point.y - 5 }, '#172033', { width: figure.width, height: figure.height }, 11));
+    }
+  }
+
+  if (figure.measurementPanel) {
+    const measurements = Object.values(figure.snapshot.scene.scene3d.measurements ?? {})
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .slice(0, 8);
+    measurements.forEach((measurement, index) => {
+      const text = `${measurement.label ?? measurement.kind}: ${formatNumber(measurement.value)} ${measurement.unit ?? ''}`.trim();
+      commands.push(pdfText(text, { x: 12, y: 20 + index * 16 }, '#172033', { width: figure.width, height: figure.height }));
+    });
+  }
+
+  return commands.join('\n');
+}
+
+/** The magic constant that makes four cubic Beziers into a circle. */
+const KAPPA = 0.5522847498307936;
+
+function pdfCircle(centre: Vector2, radius: number): string[] {
+  const offset = radius * KAPPA;
+  const { x, y } = centre;
+  return [
+    `${pdfNumber(x + radius)} ${pdfNumber(y)} m`,
+    `${pdfNumber(x + radius)} ${pdfNumber(y + offset)} ${pdfNumber(x + offset)} ${pdfNumber(y + radius)} ${pdfNumber(x)} ${pdfNumber(y + radius)} c`,
+    `${pdfNumber(x - offset)} ${pdfNumber(y + radius)} ${pdfNumber(x - radius)} ${pdfNumber(y + offset)} ${pdfNumber(x - radius)} ${pdfNumber(y)} c`,
+    `${pdfNumber(x - radius)} ${pdfNumber(y - offset)} ${pdfNumber(x - offset)} ${pdfNumber(y - radius)} ${pdfNumber(x)} ${pdfNumber(y - radius)} c`,
+    `${pdfNumber(x + offset)} ${pdfNumber(y - radius)} ${pdfNumber(x + radius)} ${pdfNumber(y - offset)} ${pdfNumber(x + radius)} ${pdfNumber(y)} c`,
+  ];
+}
+
+/**
+ * A translucent fill, flattened against what is behind it.
+ *
+ * <p>Transparency in PDF needs a graphics-state dictionary and a resource entry
+ * for every distinct alpha, which is a lot of file for one thing: mixing the
+ * colour with the background gives the same picture wherever the shape is not
+ * overlapping something else, which for a geometry figure is nearly always.
+ */
+function blendOntoBackground(fill: string, opacity: number, background: string): string {
+  const alpha = Math.max(0, Math.min(1, opacity));
+  const behind = background === 'transparent' ? '#ffffff' : background;
+  const front = parsePdfColor(fill, false);
+  const back = parsePdfColor(behind, false);
+  const mix = (one: number, other: number): number => Math.round((one * alpha + other * (1 - alpha)) * 255);
+  const hex = (value: number): string => value.toString(16).padStart(2, '0');
+  return `#${hex(mix(front.r, back.r))}${hex(mix(front.g, back.g))}${hex(mix(front.b, back.b))}`;
+}
+
+/**
+ * Renders the figure as LaTeX: a TikZ picture and a table of measurements.
+ *
+ * <p>A fragment rather than a document, because what a teacher wants is
+ * something to paste into a worksheet they have already started. The packages
+ * it needs are named in a comment at the top so the paste does not fail
+ * silently.
+ *
+ * <p>The picture is the same primitives again, which is the point of collecting
+ * them: TikZ draws lines, filled paths, discs and text, and so does everything
+ * else here.
+ */
+export function renderGeometryLabLatex(
+  snapshot: GeometryLabSnapshot,
+  options: Partial<ExportOptions> = {},
+  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
+): string {
+  const figure = rendersTwoDimensionalScene(snapshot)
+    ? collectFigure2D(snapshot, options, complexityLimits)
+    : collectFigure3D(snapshot, options, complexityLimits);
+
+  const colors = new Map<string, string>();
+  const colorName = (value: string): string => {
+    const hex = pdfHex(value);
+    const existing = colors.get(hex);
+    if (existing) return existing;
+    const name = `kleinColor${colors.size}`;
+    colors.set(hex, name);
+    return name;
+  };
+
+  const body: string[] = [];
+  for (const primitive of figure.primitives) {
+    if (primitive.kind === 'polygon') {
+      const path = primitive.points.map(tikzPoint).join(' -- ');
+      body.push(`  \\filldraw[draw=${colorName(primitive.stroke)}, fill=${colorName(primitive.fill)}, fill opacity=${round3(primitive.fillOpacity)}, line width=${round3(primitive.strokeWidth)}pt] ${path} -- cycle;`);
+      continue;
+    }
+    if (primitive.kind === 'polyline') {
+      body.push(`  \\draw[${colorName(primitive.stroke)}, line width=${round3(primitive.strokeWidth)}pt] ${primitive.points.map(tikzPoint).join(' -- ')};`);
+      continue;
+    }
+    if (primitive.kind === 'text') {
+      body.push(`  \\node[anchor=south west, text=${colorName(primitive.color)}] at ${tikzPoint({ x: primitive.point.x + 4, y: primitive.point.y - 4 })} {${escapeLatex(primitive.text)}};`);
+      continue;
+    }
+    body.push(`  \\fill[${colorName(primitive.color)}] ${tikzPoint(primitive.point)} circle (3.5pt);`);
+    if (primitive.label !== undefined) {
+      body.push(`  \\node[anchor=south west] at ${tikzPoint({ x: primitive.point.x + 5, y: primitive.point.y - 5 })} {${escapeLatex(primitive.label)}};`);
+    }
+  }
+
+  const lines = [
+    '% Needs \\usepackage{tikz} in the preamble.',
+    ...[...colors.entries()].map(([hex, name]) => `\\definecolor{${name}}{HTML}{${hex.slice(1).toUpperCase()}}`),
+    // y is negated so the coordinates are the ones the figure is drawn at:
+    // TikZ counts upwards and a rendered figure counts downwards.
+    '\\begin{tikzpicture}[x=1pt, y=-1pt]',
+    ...body,
+    '\\end{tikzpicture}',
+  ];
+
+  const measurements = latexMeasurements(snapshot);
+  if (measurements.length > 0) {
+    lines.push(
+      '',
+      '\\begin{tabular}{ll}',
+      '\\textbf{Measurement} & \\textbf{Value} \\\\',
+      '\\hline',
+      ...measurements,
+      '\\end{tabular}',
+    );
+  }
+
+  const output = lines.join('\n');
+  assertGeometryLabExportOutputComplexity(output, figure.limits);
+  return output;
+}
+
+/**
+ * A measurement's label and value as table cells.
+ *
+ * <p>A label that reads as an expression is set as mathematics rather than as
+ * text, through the shared parser and formatter - so `x^2 + 1` comes out as
+ * real superscripts instead of a caret. A label that is not an expression is
+ * escaped and left alone, which is most of them.
+ */
+function latexMeasurements(snapshot: GeometryLabSnapshot): string[] {
+  const rows: string[] = [];
+  const add = (label: string, value: number, unit: string | undefined): void => {
+    const amount = Number.isFinite(value) ? round3(value) : value;
+    rows.push(`${latexLabel(label)} & $${amount}${latexUnit(unit)}$ \\\\`);
+  };
+  for (const measurement of Object.values(snapshot.scene.scene2d.measurements ?? {})
+    .sort((left, right) => left.id.localeCompare(right.id))) {
+    if (measurement.hidden) continue;
+    add(measurement.label ?? measurement.kind, measurement.value, measurement.unit);
+  }
+  for (const measurement of Object.values(snapshot.scene.scene3d.measurements ?? {})
+    .sort((left, right) => left.id.localeCompare(right.id))) {
+    add(measurement.label ?? measurement.kind, measurement.value, measurement.unit);
+  }
+  return rows;
+}
+
+/**
+ * A unit as mathematics.
+ *
+ * <p>Written out rather than escaped, because the escaping is wrong inside a
+ * formula: `u^2` run through the text escaper comes out as a literal caret
+ * where a superscript was meant, and degrees want the symbol rather than the
+ * letters. The set is small and closed, so naming its members is simpler than
+ * teaching the escaper about mathematics.
+ */
+function latexUnit(unit: string | undefined): string {
+  if (unit === undefined || unit === '') return '';
+  if (unit === 'deg') return '^{\\circ}';
+  const power = /^([a-z]+)\^(\d+)$/i.exec(unit);
+  if (power) return `\\;\\mathrm{${power[1]}}^{${power[2]}}`;
+  return `\\;\\mathrm{${escapeLatex(unit)}}`;
+}
+
+function latexLabel(label: string): string {
+  // Only worth setting as mathematics when it actually reads as an expression:
+  // a plain word parses as a variable, and `$AB$` is italic nonsense.
+  if (!/[-+*/^()]|\d/.test(label)) return escapeLatex(label);
+  try {
+    const parsed = parseMath(label);
+    if (parsed.warnings.length === 0) return `$${formatMathNode(parsed.ast, 'latex')}$`;
+  } catch {
+    // Not an expression; the escaped text is the right answer.
+  }
+  return escapeLatex(label);
+}
+
+function tikzPoint(point: Vector2): string {
+  return `(${round3(point.x)}pt, ${round3(point.y)}pt)`;
+}
+
+function escapeLatex(value: string): string {
+  return value.replace(/[\\&%$#_{}~^]/g, match => ({
+    '\\': '\\textbackslash{}',
+    '&': '\\&', '%': '\\%', '$': '\\$', '#': '\\#', '_': '\\_',
+    '{': '\\{', '}': '\\}', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}',
+  }[match] ?? match));
+}
+
+/** A colour as `#rrggbb`, whatever notation it arrived in. */
+function pdfHex(color: string): string {
+  const rgb = parsePdfColor(color, false);
+  const channel = (value: number): string => Math.round(value * 255).toString(16).padStart(2, '0');
+  return `#${channel(rgb.r)}${channel(rgb.g)}${channel(rgb.b)}`;
+}
+
+function round3(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const rounded = Math.round(value * 1e3) / 1e3;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+function serializeFigureSvg(figure: CollectedFigure): string {
+  const builder = new BoundedSvgOutput(figure.limits.maxExportBytes);
+  builder.append(svgRoot(
+    figure.width,
+    figure.height,
+    figure.label,
+    figure.describe ? geometryLabFigureSummary(figure.snapshot) : null,
+    figure.describe,
   ));
-  builder.append(`<rect width="100%" height="100%" fill="${escapeXml(String(background))}"/>`);
+  builder.append(`<rect width="100%" height="100%" fill="${escapeXml(figure.background)}"/>`);
   builder.append(`<g stroke-linecap="round" stroke-linejoin="round" font-family="${KLEIN_UI_FONT_STACK.replace(/"/g, '&quot;')}">`);
   const emitted = new Set<string>();
-  for (const primitive of primitives) builder.append(renderPrimitive(primitive, focusable, emitted));
+  for (const primitive of figure.primitives) {
+    builder.append(renderPrimitive(primitive, figure.focusable, emitted));
+  }
+  if (figure.measurementPanel) builder.append(renderMeasurementsSvg(figure.snapshot, figure.width));
   builder.append('</g></svg>');
   const output = builder.toString();
-  assertGeometryLabExportOutputComplexity(output, limits);
+  assertGeometryLabExportOutputComplexity(output, figure.limits);
   return output;
 }

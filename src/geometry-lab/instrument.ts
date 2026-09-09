@@ -1,5 +1,6 @@
 /** Framework-independent Geometry Lab instrument and factory implementation. */
 import { createInstrumentRuntime, KleinSdkError } from '../core/index.js';
+import { svgToPngBlob } from '../export/index.js';
 import type {
   ApplyDeltaOptions,
   Camera3DState,
@@ -88,7 +89,13 @@ import {
   geometryLabHistoryDelta,
   type GeometryLabHistoryEntry,
 } from './history.js';
-import { renderGeometryLabSvg2D, renderGeometryLabSvg3D } from './renderers.js';
+import {
+  renderGeometryLabLatex,
+  renderGeometryLabPdf,
+  renderGeometryLabSvg2D,
+  renderGeometryLabSvg3D,
+  rendersTwoDimensionalScene,
+} from './renderers.js';
 import {
   assertGeometryLabDeltaComplexity,
   assertGeometryLabExportOutputComplexity,
@@ -171,6 +178,18 @@ export {
   describeGeometryLabFigure,
   geometryLabFigureSummary,
 } from './describe.js';
+export {
+  GEOMETRY_TOOL_KEYS,
+  KEYBOARD_COMPLETABLE_TOOLS,
+  createGeometryKeyboardSession,
+} from './keyboard.js';
+export type {
+  GeometryKeyModifiers,
+  GeometryKeyPress,
+  GeometryKeyboardOptions,
+  GeometryKeyboardSession,
+  GeometryKeyboardState,
+} from './keyboard.js';
 export { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
 export type {
   GeometryConstructionProtocol,
@@ -191,7 +210,12 @@ export {
   validateGeometryLabSnapshot,
 } from './validation.js';
 export { validateGeometryLabCommand } from './commands.js';
-export { renderGeometryLabSvg2D, renderGeometryLabSvg3D } from './renderers.js';
+export {
+  renderGeometryLabLatex,
+  renderGeometryLabPdf,
+  renderGeometryLabSvg2D,
+  renderGeometryLabSvg3D,
+} from './renderers.js';
 export {
   assertGeometryLabDeltaComplexity,
   assertGeometryLabCommandComplexity,
@@ -803,6 +827,30 @@ class GeometryLabInstrument implements GeometryLab {
         data,
       };
     }
+    if (options.format === 'png' || options.format === 'thumbnail') {
+      // Rasterized from the SVG rather than drawn again: a PNG that did not
+      // match the SVG would be two pictures of one figure. Browser-only, and
+      // the failure says so rather than producing an empty image.
+      const width = Math.max(1, Math.round(options.width ?? (options.format === 'thumbnail' ? 320 : 640)));
+      const height = Math.max(1, Math.round(options.height ?? (options.format === 'thumbnail' ? 200 : 480)));
+      const svg = rendersTwoDimensionalScene(this.#snapshot)
+        ? renderGeometryLabSvg2D(this.#snapshot, { ...options, width, height }, this.#complexityLimits)
+        : renderGeometryLabSvg3D(this.#snapshot, { ...options, width, height }, this.#complexityLimits);
+      const data = await svgToPngBlob(svg, { width, height });
+      return { format: options.format, mimeType: 'image/png', data } as ExportResult;
+    }
+    if (options.format === 'pdf') {
+      const data = renderGeometryLabPdf(this.#snapshot, options, this.#complexityLimits);
+      return {
+        format: 'pdf',
+        mimeType: 'application/pdf',
+        data: new Blob([data], { type: 'application/pdf' }),
+      };
+    }
+    if (options.format === 'latex') {
+      const data = renderGeometryLabLatex(this.#snapshot, options, this.#complexityLimits);
+      return { format: 'latex', mimeType: 'application/x-latex', data };
+    }
     if (options.format === 'text') {
       const data = describeGeometryLabFigure(this.#snapshot);
       assertGeometryLabExportOutputComplexity(data, this.#complexityLimits);
@@ -813,7 +861,10 @@ class GeometryLabInstrument implements GeometryLab {
       };
     }
 
-    throw new KleinSdkError('unsupported_export', 'Geometry Lab currently supports JSON, SVG, and text exports.');
+    throw new KleinSdkError(
+      'unsupported_export',
+      `Geometry Lab does not support ${options.format} export yet.`,
+    );
   }
 
   /* ---------------------------------------------------------------------- */
@@ -2407,12 +2458,6 @@ function intersectPlanes(first: PlaneData3D, second: PlaneData3D): GeometryLine3
  * there was a 2D renderer, SVG always meant the 3D scene, and it still does for
  * every snapshot that has nothing 2D in it.
  */
-function rendersTwoDimensionalScene(snapshot: GeometryLabSnapshot): boolean {
-  if (snapshot.appState.activeView === '3d') return false;
-  const scene2d = snapshot.scene.scene2d;
-  return Object.keys(scene2d.points).length > 0 || Object.keys(scene2d.entities).length > 0;
-}
-
 function withEntity2DStyle<T extends GeometryEntity>(entity: T, style: GeometryLabStyleOptions): T {
   const next = { ...entity } as T & GeometryLabStyleOptions;
   if (style.label !== undefined) next.label = style.label;

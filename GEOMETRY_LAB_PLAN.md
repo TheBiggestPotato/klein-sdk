@@ -17,7 +17,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 2 - Close the 2D gap | 5 | 5 | Complete |
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 7 | 7 | Complete |
-| 5 - Accessibility and output | 2 | 5 | 5.1 and 5.2 landed; 5.5 is a scope decision, not an implementation |
+| 5 - Accessibility and output | 4 | 5 | 5.1-5.4 landed; 5.5 is a scope decision, not an implementation |
 | 6 - Mathematical depth | 0 | 5 | |
 
 Run `npm run bench:geometry-lab` for the current numbers, or
@@ -1259,11 +1259,78 @@ students who currently get nothing.
   still being measured through - a constructed line has no direction without its
   helper - so `perpendicular:AB,line(M)` is stated, and reads as "AB is
   perpendicular to the line through M". The 85-figure differential is unchanged.
-- [ ] **5.3 Keyboard construction path.** Every tool reachable without a
-  pointer.
-- [ ] **5.4 Export formats.** PNG and PDF (PNG is already flagged unchecked in
-  `GEOGEBRA_V0_SDK_IMPLEMENTATION_PLAN.md`), LaTeX for labels and measurements
-  via the existing `formatMathNode(node, 'latex')`.
+- [x] **5.3 Keyboard construction path.** `createGeometryKeyboardSession(lab)`
+  in `keyboard.ts`: a session that takes key *names* - the strings a
+  `KeyboardEvent.key` carries - and drives the Lab. No DOM, no listeners, so it
+  does not answer 5.5 by growing them.
+
+  **A cursor and a focus, which is the whole trick.** Pointing does two jobs at
+  once - "somewhere" and "that one" - and a keyboard has to separate them. Arrow
+  keys move a cursor through the plane, so a point can be placed anywhere; Tab
+  moves focus object to object and brings the cursor with it, so an existing
+  object can be picked. Every construction is then "focus the things it is made
+  from, in order, pressing Enter on each", and shift with an arrow moves the
+  focused point - dragging without a pointer, which is the only way to change a
+  figure once it is built.
+
+  Details that matter to somebody who cannot see the screen: the status line
+  always says **what to do next**, which is the one thing a keyboard user cannot
+  work out by looking; a construction the geometry refuses is a message rather
+  than a thrown error, because a student who chose two coincident points should
+  be told and not have their session end; and a key the session has no use for
+  is *reported* rather than swallowed, so the host keeps its own shortcuts and
+  anything with a command modifier is never taken.
+
+  Navigation is in **construction order** - the order the figure's own
+  description reads in - and not the paint order the SVG's tab order is stuck
+  with. A host wiring this should give the figure one tab stop and let the
+  session move within it, which is how a composite widget works; the renderer's
+  `focusableObjects` is the fallback for a host with no session and the two
+  should not both be on.
+
+  **A gap it found.** `GeometryLabTool` declares no `ray`, `line` or `vector`
+  tool, though the API builds all three - so a keyboard user cannot make them,
+  and neither can a pointer user, because there is no tool to pick. A gap in the
+  tool vocabulary rather than in the keyboard, and widening a persisted union is
+  not something an accessibility task should do quietly. Recorded here instead.
+- [x] **5.4 Export formats.** `pdf`, `png`, `thumbnail` and `latex` all work
+  from `export()`.
+
+  The change that made it small was **separating collecting a figure from
+  writing one**. The renderers already reduced a scene to four shapes - filled
+  path, open path, disc, text - and were then hard-wired to SVG. They now return
+  that list, and each format is a serializer over it. So a PDF is not a second
+  reading of the scene that could drift from the first; the test that carries
+  the most weight compares path coordinates between the SVG and the PDF, and
+  between the SVG and the LaTeX, and asserts they agree exactly.
+
+  - **PDF** is written directly, with no dependency and no font embedding: the
+    page uses Helvetica, which every reader has. A point is four Bezier arcs
+    because PDF has no circle operator and a square where the screen shows a
+    disc is a different drawing. A translucent polygon is filled with the colour
+    it would blend to rather than with real transparency, which would need a
+    graphics-state dictionary per distinct alpha - the same picture, for a
+    fraction of the file. The cross-reference table is checked by a test that
+    walks each offset and asserts the object is there, because a wrong offset
+    makes a file unopenable rather than merely wrong.
+  - **PNG** is rasterized from the SVG rather than drawn again, and refuses with
+    a message naming the reason outside a browser. A silent blank image would be
+    worse than a refusal a host can act on.
+  - **LaTeX** is a TikZ picture and a table, as a fragment rather than a
+    document, because what a teacher wants is something to paste into a
+    worksheet they have already started; the packages it needs are named in a
+    comment so the paste does not fail silently. A measurement label that reads
+    as an expression is set as mathematics through `parseMath` and
+    `formatMathNode(node, 'latex')` - which is where the task's own suggestion
+    lands - and one that does not is escaped and left alone, because `$AB$` is
+    italic nonsense. Units are written out rather than escaped: `u^2` through
+    the text escaper is a literal caret where a superscript was meant.
+
+  **The PDF and PNG writers are now shared with the Geometry Calculator**, which
+  had the only copy. A PDF writer is not interesting code, but it is exactly the
+  kind that rots differently in two places, and a figure that printed correctly
+  from one instrument and not the other would be a bug nobody could explain.
+  That took 105 lines out of the Calculator and changed no behaviour.
 - [ ] **5.5 Interaction layer decision.** `mount()` sets `innerHTML` to static
   SVG (`instrument.ts:1424`) and registers no event listeners: no hit testing,
   no snapping, no drag. The working Lab exists only inside klein-client.
