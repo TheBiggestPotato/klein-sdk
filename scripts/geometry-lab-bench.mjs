@@ -529,11 +529,26 @@ export const CASES = [
   },
   {
     id: 'invariants-24',
-    title: 'computeGeometryInvariants at the current 24-point cap',
+    // Kept at twenty-four after the cap was raised, so the number stays
+    // comparable with every baseline taken before bucketing.
+    title: 'computeGeometryInvariants over 24 points',
     findings: ['P9'],
     budgetMs: 8,
     run() {
       const lab = buildInvariantScene(24);
+      const snapshot = lab.getSnapshot();
+      return () => computeGeometryInvariants(snapshot);
+    },
+  },
+  {
+    id: 'invariants-cap',
+    // A figure at the raised cap, dense enough that the scan gives up at the
+    // fact bound: the worst case marking can be asked for.
+    title: 'computeGeometryInvariants at the 128-point cap',
+    findings: ['P9'],
+    budgetMs: 8,
+    run() {
+      const lab = buildInvariantScene(128);
       const snapshot = lab.getSnapshot();
       return () => computeGeometryInvariants(snapshot);
     },

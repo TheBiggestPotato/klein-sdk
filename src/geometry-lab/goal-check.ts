@@ -136,9 +136,9 @@ interface ReadInvariant {
  */
 function invariantReader(names: readonly string[]): (id: GeometryInvariantId) => ReadInvariant {
   const seen = new Map<string, ReadInvariant>();
-  const splits = new Map<string, string[] | null>();
+  const splits = new Map<string, Segmentation>();
 
-  const split = (text: string, count: number): string[] | null => {
+  const split = (text: string, count: number): Segmentation => {
     const key = `${count}\u0000${text}`;
     const cached = splits.get(key);
     if (cached !== undefined) return cached;
@@ -166,7 +166,7 @@ function invariantReader(names: readonly string[]): (id: GeometryInvariantId) =>
 function readInvariant(
   invariant: GeometryInvariantId,
   names: readonly string[],
-  split: (text: string, count: number) => string[] | null,
+  split: (text: string, count: number) => Segmentation,
 ): ReadInvariant {
   const trimmed = invariant.trim();
   const colon = trimmed.indexOf(':');
@@ -182,8 +182,8 @@ function readInvariant(
       // Two two-point objects, neither the objects nor their ends ordered.
       const parts = args.split(',');
       if (parts.length !== 2) return literal();
-      const first = split(parts[0] as string, 2);
-      const second = split(parts[1] as string, 2);
+      const first = readable(split(parts[0] as string, 2));
+      const second = readable(split(parts[1] as string, 2));
       if (!first || !second) return literal();
       const one = joined(first);
       const other = joined(second);
@@ -194,7 +194,7 @@ function readInvariant(
     }
     case 'right-angle': {
       // `ABC` is the angle at B, and reading it backwards is the same angle.
-      const segmented = split(args, 3);
+      const segmented = readable(split(args, 3));
       if (!segmented) return literal();
       const [first, vertex, third] = segmented as [string, string, string];
       const arms = [first, third].sort();
@@ -213,7 +213,7 @@ function readInvariant(
       const parts = args.split(',');
       if (parts.length !== 2) return literal();
       const middle = (parts[0] as string).trim();
-      const between = split(parts[1] as string, 2);
+      const between = readable(split(parts[1] as string, 2));
       if (!between) return literal();
       return {
         canonical: `${kind}:${middle},${joined(between)}`,
@@ -228,9 +228,103 @@ function readInvariant(
       const point = parts[0] as string;
       return { canonical: trimmed, objects: names.includes(point) ? [point] : [] };
     }
+    case 'point-on': {
+      // `P,AB`: the point, then the object it lies on, whose ends are unordered.
+      const parts = args.split(',');
+      if (parts.length !== 2) return literal();
+      const point = (parts[0] as string).trim();
+      const on = readable(split(parts[1] as string, 2));
+      if (!on) return literal();
+      return {
+        canonical: `${kind}:${point},${joined(on)}`,
+        objects: names.includes(point) ? [point, ...on] : [],
+      };
+    }
+    case 'tangent': {
+      // `AB,circle(O)`: a two-point object, then a circle named for its centre.
+      const parts = args.split(',');
+      if (parts.length !== 2) return literal();
+      const line = readable(split(parts[0] as string, 2));
+      if (!line) return literal();
+      return { canonical: `${kind}:${joined(line)},${(parts[1] as string).trim()}`, objects: line };
+    }
+    case 'equal-angles': {
+      // Two angles, each written vertex-in-the-middle and each reversible.
+      const parts = args.split(',');
+      if (parts.length !== 2) return literal();
+      const first = angleName(parts[0] as string, split);
+      const second = angleName(parts[1] as string, split);
+      if (first === null || second === null) return literal();
+      return {
+        canonical: `${kind}:${first.canonical <= second.canonical
+          ? `${first.canonical},${second.canonical}`
+          : `${second.canonical},${first.canonical}`}`,
+        objects: [...first.objects, ...second.objects],
+      };
+    }
+    case 'congruent':
+    case 'similar':
+    case 'equal-area': {
+      // Two polygons, each named by its corners in no particular order and of
+      // no particular number - a quadrilateral has equal area to a triangle
+      // just as readily.
+      const parts = args.split(',');
+      if (parts.length !== 2) return literal();
+      const first = corners(parts[0] as string, split);
+      const second = corners(parts[1] as string, split);
+      if (!first || !second) return literal();
+      const one = first.slice().sort().join('');
+      const other = second.slice().sort().join('');
+      return {
+        canonical: `${kind}:${one <= other ? `${one},${other}` : `${other},${one}`}`,
+        objects: [...first, ...second],
+      };
+    }
     default:
       return literal();
   }
+}
+
+/** `ABC` and `CBA` are the same angle: the vertex stays, the arms sort. */
+function angleName(
+  text: string,
+  split: (value: string, count: number) => Segmentation,
+): { canonical: string; objects: string[] } | null {
+  const segmented = readable(split(text, 3));
+  if (!segmented) return null;
+  const [first, vertex, third] = segmented as [string, string, string];
+  const arms = [first, third].sort();
+  return { canonical: `${arms[0]}${vertex}${arms[1]}`, objects: segmented };
+}
+
+/**
+ * The corners of a polygon, whose number the name does not say.
+ *
+ * <p>Every plausible corner count is tried and the reading is accepted only if
+ * exactly one of them works - the same refusal as an ambiguous two-point name,
+ * for the same reason.
+ */
+function corners(
+  text: string,
+  split: (value: string, count: number) => Segmentation,
+): string[] | null {
+  let only: string[] | null = null;
+  for (let count = 3; count <= 12; count += 1) {
+    const segmented = split(text, count);
+    // A corner count that reads two ways is a refusal outright: another count
+    // reading cleanly does not make the name unambiguous, it just means this
+    // loop looked somewhere else.
+    if (segmented === 'ambiguous') return null;
+    if (segmented === null) continue;
+    if (only) return null;
+    only = segmented;
+  }
+  return only;
+}
+
+/** The one reading, or nothing when there was none or more than one. */
+function readable(segmentation: Segmentation): string[] | null {
+  return Array.isArray(segmentation) ? segmentation : null;
 }
 
 /** `BA` and `AB` both become `AB`. */
@@ -248,11 +342,13 @@ function joined(segmented: readonly string[]): string {
  * caller falls back to comparing the id literally. Guessing would silently
  * credit the wrong segment.
  */
+type Segmentation = string[] | 'ambiguous' | null;
+
 function segmentName(
   text: string,
   names: readonly string[],
   count: number,
-): string[] | null {
+): Segmentation {
   const target = text.trim();
   let only: string[] | null = null;
   let found = 0;
@@ -278,7 +374,8 @@ function segmentName(
   };
 
   walk(0, []);
-  return found === 1 ? only : null;
+  if (found === 1) return only;
+  return found > 1 ? 'ambiguous' : null;
 }
 
 function pointNames(snapshot: GeometryLabSnapshot): string[] {

@@ -193,7 +193,7 @@ test('a truncated report cannot call a fact missing', () => {
   // More points than the reporter will scan, so its answer is bounded and it
   // says so. A fact it never reached must not be reported as absent.
   const many = {};
-  for (let index = 0; index < 40; index += 1) {
+  for (let index = 0; index < 240; index += 1) {
     many[`P${index}`] = [Math.cos(index * 1.7) * 37, Math.sin(index * 2.3) * 41];
   }
   const figure = snapshot(many);
@@ -207,11 +207,14 @@ test('a truncated report cannot call a fact missing', () => {
 test('a satisfied goal is satisfied even when the report was truncated', () => {
   // Truncation can only hide facts, so everything asked for having been found
   // is a complete answer whatever else was skipped.
-  const many = { A: [-4, 0], B: [4, 0], M: [0, 0] };
-  for (let index = 0; index < 40; index += 1) {
+  const many = { A: [-4, 0], B: [0, 0], C: [4, 0] };
+  for (let index = 0; index < 240; index += 1) {
     many[`P${index}`] = [Math.cos(index * 1.7) * 37, Math.sin(index * 2.3) * 41];
   }
-  const result = checkGeometryGoal(snapshot(many), ['midpoint:M,AB']);
+  const figure = snapshot(many);
+  assert.equal(computeGeometryInvariants(figure).truncated, true);
+
+  const result = checkGeometryGoal(figure, ['collinear:A,B,C']);
   assert.equal(result.satisfied, true);
   assert.equal(result.incomplete, false);
 });
@@ -260,4 +263,79 @@ test('a construction that becomes wrong when dragged stops satisfying its goal',
 
   lab.applyDelta({ op: 'updatePoint', id: b, changes: { x: 9, y: 0 } });
   assert.equal(lab.checkGoal(['equal-segments:AC,BC']).satisfied, false, 'and not after the drag');
+});
+
+/* -------------------------------------------------------------------------- */
+/* The vocabulary added with bucketing (plan task 4.3)                        */
+/* -------------------------------------------------------------------------- */
+
+test('the new relations are spelled the same however a mark scheme writes them', () => {
+  const figure = snapshot(
+    {
+      A: [0, 0], B: [3, 0], C: [0, 4],
+      D: [10, 0], E: [13, 0], F: [10, 4],
+      M: [1.5, 0],
+    },
+    {
+      s1: segment('s1', 'A', 'B'),
+      s2: segment('s2', 'A', 'C'),
+      t1: { id: 't1', kind: 'polygon', pointIds: ['A', 'B', 'C'] },
+      t2: { id: 't2', kind: 'polygon', pointIds: ['D', 'E', 'F'] },
+    },
+  );
+  const holds = (goal) => checkGeometryGoal(figure, [goal]).satisfied;
+
+  assert.ok(holds('point-on:M,AB'), 'M is on the segment AB');
+  assert.ok(holds('point-on:M,BA'), 'and the ends of that segment are unordered');
+
+  assert.ok(holds('congruent:ABC,DEF'));
+  assert.ok(holds('congruent:DEF,ABC'), 'the two triangles are unordered');
+  assert.ok(holds('congruent:CBA,FED'), 'and so are the corners of each');
+
+  assert.ok(holds('similar:BAC,EDF'));
+  assert.ok(holds('equal-area:CAB,FDE'));
+});
+
+test('equal angles read either way round', () => {
+  const figure = snapshot(
+    { A: [0, 0], B: [4, 0], C: [2, 3], D: [20, 0], E: [24, 0], F: [22, 3] },
+    {
+      s1: segment('s1', 'A', 'B'), s2: segment('s2', 'A', 'C'),
+      s3: segment('s3', 'D', 'E'), s4: segment('s4', 'D', 'F'),
+    },
+  );
+  for (const spelling of ['equal-angles:BAC,EDF', 'equal-angles:CAB,EDF', 'equal-angles:FDE,BAC']) {
+    assert.equal(checkGeometryGoal(figure, [spelling]).satisfied, true, spelling);
+  }
+  assert.equal(
+    checkGeometryGoal(figure, ['equal-angles:ABC,EDF']).satisfied,
+    false,
+    'a different vertex is a different angle',
+  );
+});
+
+test('a tangent is named by its line and the circle it touches', () => {
+  const figure = snapshot(
+    { O: [0, 0], A: [-8, 5], B: [8, 5] },
+    { s1: segment('s1', 'A', 'B'), c1: { id: 'c1', kind: 'circle', centerId: 'O', radius: 5 } },
+  );
+  assert.ok(checkGeometryGoal(figure, ['tangent:AB,circle(O)']).satisfied);
+  assert.ok(checkGeometryGoal(figure, ['tangent:BA,circle(O)']).satisfied, 'the line ends are unordered');
+});
+
+test('a polygon name that could be read at two corner counts is refused', () => {
+  // Same rule as a two-point name: with points B, C and BC in one figure,
+  // `BCBC` is either a triangle or a quadrilateral, and guessing would credit
+  // a different polygon from the one the author meant.
+  const names = { B: [0, 0], C: [6, 0], BC: [0, 8], D: [20, 0], E: [26, 0], F: [20, 8] };
+  const figure = snapshot(names, {
+    t1: { id: 't1', kind: 'polygon', pointIds: ['B', 'C', 'BC'] },
+    t2: { id: 't2', kind: 'polygon', pointIds: ['D', 'E', 'F'] },
+  });
+  assert.ok(checkGeometryGoal(figure, ['congruent:BBCC,DEF']).satisfied, 'the sorted spelling marks');
+  assert.deepEqual(
+    checkGeometryGoal(figure, ['congruent:BCBC,DEF']).missing,
+    ['congruent:BCBC,DEF'],
+    'and the ambiguous one is refused rather than guessed',
+  );
 });

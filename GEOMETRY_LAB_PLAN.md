@@ -16,7 +16,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
 | 2 - Close the 2D gap | 5 | 5 | Complete |
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
-| 4 - The learning layer | 1 | 6 | 4.1 landed; 4.2 next |
+| 4 - The learning layer | 3 | 7 | 4.1-4.3 landed; 4.3b split out for the 3D vocabulary |
 | 5 - Accessibility and output | 0 | 5 | |
 | 6 - Mathematical depth | 0 | 5 | |
 
@@ -965,17 +965,90 @@ this document.
   because there is nothing to go stale. Covers 2D fully, and in 3D covers
   solids, work planes, cross-sections and the two plane-intersection
   constructions; a solid's own mesh points are machinery, not sources.
-- [ ] **4.3 Invariant vocabulary - algorithmically, not by adding loops.**
-  Missing today: concyclic, tangency, congruent and similar triangles, equal
-  angles, incidence, ratio, area equality, and every 3D relation (coplanar,
-  skew, perpendicular-to-plane, inscribed). Adding these to the current O(P³)
-  structure is not affordable (P9). Replace the nested scans with **canonical
-  bucketing**: quantize each measured quantity - length, direction, angle - into
-  hash buckets sized by the relative tolerance, then compare only within a
-  bucket and its neighbours. Equal-segments drops from O(S²) toward O(S), and
-  `MAX_POINTS` can rise from 24 into the low hundreds inside budget. The
-  neighbour check is not optional: quantizing at tolerance ε without it misses
-  every pair that straddles a bucket boundary.
+- [~] **4.3 Invariant vocabulary - algorithmically, not by adding loops.**
+  *Bucketing and the 2D vocabulary landed; 3D is split out below.*
+
+  The nested scans are gone. Every relation here is "two measurements agree to
+  within a tolerance", so each quantity - length, direction, angle, area, a
+  triangle's shortest side, a triangle's side ratio - is quantized into buckets
+  one tolerance wide (`tolerance-buckets.ts`). Two values that agree cannot land
+  more than a bucket apart, so only pairs inside a bucket and across one
+  boundary are tested. **The neighbour is not optional**, exactly as the task
+  said: without it every pair either side of a boundary is missed, silently and
+  only sometimes.
+
+  Bucketing *proposes* pairs; each is then put through the same comparison the
+  exhaustive version used, so this changed what is looked at and not what is
+  true. Proved by an 85-figure differential built to sit on the boundary - pairs
+  placed at 0, 0.25, 0.5, 0.9, 0.99, 1, 1.01, 1.1, 2 and 3 times the tolerance,
+  for lengths, directions, angles and circle radii, plus degenerate,
+  dangling-reference, far-from-origin, tiny and non-finite figures. **Every
+  established fact is identical** across all 85. Two tests walk a pair across
+  the tolerance in fortieths so a boundary is crossed at every phase within a
+  bucket.
+
+  Measured, and not uniformly a win:
+
+  | figure | before | after | |
+  | --- | --- | --- | --- |
+  | 6-12 points, few objects | 0.010-0.036 ms | 0.018-0.048 ms | **1.3-2.0x slower** |
+  | 16-24 points | 0.11-0.25 ms | 0.09-0.20 ms | 1.2-1.3x faster |
+  | 20 points, 190 segments | 3.53 ms | 0.74 ms | 4.8x faster |
+  | 40 points, 780 segments | 20.3 ms | 3.07 ms | 6.6x faster |
+  | 60 points, 1770 segments | 91.2 ms | 8.68 ms | 10.5x faster |
+
+  A small figure is slower, because bucketing's fixed cost is not repaid until
+  there are enough pairs to skip. Tens of microseconds on a figure that is
+  marked once rather than per frame, and the alternative - a second exhaustive
+  path below a threshold - is two implementations of the same comparisons and
+  the drift that comes with them. Stated rather than hidden. The first version
+  was worse: reusing one bucket set across vertices instead of allocating one
+  per vertex, and walking pairs through a callback instead of a generator, took
+  the small-figure penalty from 2.1x to 1.7x and everything else down by a
+  quarter.
+
+  `MAX_POINTS` rose from **24 to 128** - the number is measured, not chosen: the
+  densest figure the benchmark builds costs 4.8 ms at 128 and would exceed the
+  harness's 8 ms budget at 160. Two new bounds keep that affordable. Facts stop
+  being *found* at four times the number that can be reported, so a figure with
+  a reasonable number of them is reported exactly as before and only a figure
+  already far past what can be stated is affected. And the incidence and
+  tangency scans - the two relations that are a point against an object rather
+  than two measurements agreeing, and so have no quantity to bucket on - carry a
+  work budget, because the fact bound does not stop them: a thousand segments
+  that no point lies on cost a thousand tests to find out. Both make the report
+  say it was truncated, which is what every bound here does.
+
+  New vocabulary, each with its own tolerance story: `point-on` (incidence,
+  tested against the part of the object that is drawn, so a segment whose
+  *extension* would pass through a point is not credited), `tangent` (same
+  extent rule), `equal-angles` (over angles the figure shows - a vertex and two
+  points joined to it - compared as angles rather than through a sine, so the
+  tolerance is the arcsine one directly), `congruent` and `similar` (bucketed on
+  the shortest side and on the shortest-to-longest ratio), and `equal-area`
+  (compared against the figure's size *squared* times the relative tolerance,
+  because an area is a length squared). Goal checking (4.1) learned to
+  canonicalise all six.
+
+  **Not done, with reasons.**
+
+  - *Concyclic.* Four points on a circle that is drawn is already
+    `point-on-circle` four times, which a mark scheme can ask for. Four points
+    on a circle that is *not* drawn is a search over circumcircles - that is,
+    over triples - which is the cost this task exists to remove. A maximal-set
+    fact (`concyclic:A,B,C,D,E`) would not match an author asking about four of
+    the five, so it would be a fact nobody could use.
+  - *Ratio.* `ratio:AB,CD=2` carries a value inside the id. Every fact in this
+    vocabulary is a boolean whose id names only objects, and both the goal
+    checker's canonicaliser and the mark-scheme grammar assume that. Worth doing
+    with a grammar that has somewhere to put a number, not by smuggling one in.
+- [ ] **4.3b 3D invariant vocabulary.** `coplanar`, `skew`,
+  `perpendicular-to-plane`, `inscribed`. Split from 4.3 rather than rushed into
+  it: the reporter reads `scene2d` only, and a 3D pass needs its own naming (a
+  work plane is not named by two points), its own figure scale, and a tolerance
+  story per relation. The bucketing primitive 4.3 introduced is what makes it
+  affordable, and `skew` in particular - neither parallel nor intersecting - is
+  a direction bucket lookup rather than a scan.
 - [ ] **4.4 Conjecture detection.** Perturb the free points k times, recompute,
   and keep only the invariants that survive every sample. This is what separates
   "true by construction" from "true because the student dragged it there", which
