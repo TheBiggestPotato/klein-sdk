@@ -134,6 +134,8 @@ import { computeGeometryInvariants } from './gradable-invariants.js';
 import type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
 import { checkGeometryGoal } from './goal-check.js';
 import type { GeometryGoalCheck } from './goal-check.js';
+import { detectGeometryConjectures } from './conjectures.js';
+import type { GeometryConjectureOptions, GeometryConjectureReport } from './conjectures.js';
 import { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
 import type { GeometryConstructionProtocol } from './protocol.js';
 
@@ -141,6 +143,8 @@ export { computeGeometryInvariants, RELATIVE_TOLERANCE } from './gradable-invari
 export type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
 export { checkGeometryGoal } from './goal-check.js';
 export type { GeometryGoalCheck } from './goal-check.js';
+export { detectGeometryConjectures } from './conjectures.js';
+export type { GeometryConjectureOptions, GeometryConjectureReport } from './conjectures.js';
 export { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
 export type {
   GeometryConstructionProtocol,
@@ -567,6 +571,18 @@ class GeometryLabInstrument implements GeometryLab {
    */
   checkGoal(targetInvariants: readonly GeometryInvariantId[]): GeometryGoalCheck {
     return checkGeometryGoal(this.#snapshot, targetInvariants, this.getInvariants());
+  }
+
+  /**
+   * Which of the figure's facts are true of the construction rather than of
+   * this configuration of it.
+   *
+   * <p>Costs several recomputations of the whole figure, so it belongs where a
+   * marker asks a question - an idle callback, a worker, a "check" button -
+   * and never in a drag.
+   */
+  detectConjectures(options: GeometryConjectureOptions = {}): GeometryConjectureReport {
+    return detectGeometryConjectures(this.#snapshot, options);
   }
 
   /**

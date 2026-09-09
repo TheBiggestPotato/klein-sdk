@@ -16,7 +16,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
 | 2 - Close the 2D gap | 5 | 5 | Complete |
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
-| 4 - The learning layer | 3 | 7 | 4.1-4.3 landed; 4.3b split out for the 3D vocabulary |
+| 4 - The learning layer | 4 | 7 | 4.1-4.4 landed; 4.5 and 4.6 next, 4.3b split out |
 | 5 - Accessibility and output | 0 | 5 | |
 | 6 - Mathematical depth | 0 | 5 | |
 
@@ -1049,13 +1049,41 @@ this document.
   story per relation. The bucketing primitive 4.3 introduced is what makes it
   affordable, and `skew` in particular - neither parallel nor intersecting - is
   a direction bucket lookup rather than a scan.
-- [ ] **4.4 Conjecture detection.** Perturb the free points k times, recompute,
-  and keep only the invariants that survive every sample. This is what separates
-  "true by construction" from "true because the student dragged it there", which
-  the current single-configuration check cannot distinguish - the module's own
-  documentation is candid that tolerance is the hard part. Depends on 4.3 being
-  sub-cubic. Run off the interaction path, in an idle callback or a worker,
-  never per frame.
+- [x] **4.4 Conjecture detection.** `detectGeometryConjectures(snapshot,
+  options?)`, on the Lab as `detectConjectures`. Perturbs the free points,
+  recomputes the figure through the same canonicalisation an edit goes through -
+  constraints and all - and keeps only the facts that hold in every
+  configuration. A constructed midpoint follows its ends through all of them; a
+  point nudged until the halves looked equal comes apart on the first sample.
+
+  Decisions worth stating:
+
+  - **A free point is one with no construction and no lock.** A constructed
+    point is not free - it goes where its rule sends it - and a locked point is
+    a given of the problem rather than something the student arranged. A figure
+    where *nothing* is free reports `movedPoints: 0` and every fact as
+    invariant, which is true for the trivial reason and is why the count is in
+    the report.
+  - **The nudge has to be much larger than the tolerance.** A fact is
+    established at one part in a thousand of the figure, so a perturbation of
+    that order leaves a near-coincidence sitting inside it and calls it a
+    construction. The default spread is fifty times the tolerance - large enough
+    to break a coincidence, small enough to leave the figure recognisable. A
+    test shows the failure directly rather than asserting it in a comment.
+  - **Three outcomes, not two.** A fact absent from a sample whose own marking
+    was *truncated* has not been shown to come apart; it was never looked for.
+    Those are `unsettled` rather than `coincidental`, the same discipline 4.1
+    applies to a truncated goal check. On a dense figure most facts land there -
+    at 48 points, 141 of 200 - which is the honest limit of marking a figure
+    that holds more facts than can be reported.
+  - **Deterministic.** A seeded generator rather than `Math.random`, because a
+    mark that changes between two runs of the same submission is not a mark.
+
+  Costs 10-14x a single marking - eight recomputations of the whole figure plus
+  eight markings - which is 0.5 ms on a six-point figure and 11 ms on a
+  forty-eight-point one. That is why it is a method a host calls when a marker
+  asks a question, and the documentation says so: an idle callback, a worker, a
+  "check" button, never a drag.
 - [ ] **4.5 Machine-readable exercises.** `GEOMETRY_LAB_EXERCISES.md` is good
   content in a dead format: not machine-readable, not tagged to standards, not
   linked to invariants, no hint ladder, no mastery sequencing, no attempt
