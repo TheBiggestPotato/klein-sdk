@@ -69,6 +69,14 @@ interface NamedPoint {
   readonly name: string;
   readonly x: number;
   readonly y: number;
+  /**
+   * Whether the instrument made this point rather than a person: the helper
+   * that gives a constructed line its direction, the centre a circle through
+   * three points is drawn about. It still has to be measured through - the line
+   * has no direction without it - but nothing is said about it and nothing is
+   * named after it.
+   */
+  readonly machinery: boolean;
 }
 
 /** An arm from the vertex under consideration to one other point. */
@@ -91,9 +99,13 @@ export function computeGeometryInvariants(
   snapshot: GeometryLabSnapshot,
 ): GeometryInvariantReport {
   const scene = snapshot.scene.scene2d;
-  const allPoints = namedPoints(scene.points);
-  const points = allPoints.slice(0, MAX_POINTS);
-  const truncated = allPoints.length > MAX_POINTS;
+  // Every finite point, because an object still has to be *measured* through a
+  // helper even though nothing is *said* about the helper itself, and the
+  // subset anybody placed, which is what gets marked and named.
+  const located = allPoints2D(scene.points);
+  const placed = located.filter((point) => !point.machinery);
+  const points = placed.slice(0, MAX_POINTS);
+  const truncated = placed.length > MAX_POINTS;
   // Sorted by id, so nothing about the result depends on the order an object's
   // keys happened to be in.
   const entities = Object.values(scene.entities ?? {})
@@ -108,18 +120,19 @@ export function computeGeometryInvariants(
   // 2D points at all, so the plane pass is skipped rather than the whole
   // marking abandoned.
   if (points.length > 0 && scale >= MIN_FIGURE_SIZE) {
-    const epsilon = scale * RELATIVE_TOLERANCE;
-    const byId = new Map(points.map((point) => [point.id, point]));
+      const epsilon = scale * RELATIVE_TOLERANCE;
+    const byId = new Map(located.map((point) => [point.id, point]));
+    const named = new Set(points.map((point) => point.id));
     const indexById = new Map(points.map((point, index) => [point.id, index]));
 
-    equalSegments(entities, byId, epsilon, facts);
-    lineDirections(entities, byId, facts);
+    equalSegments(entities, byId, named, epsilon, facts);
+    lineDirections(entities, byId, named, facts);
     pointTriples(points, epsilon, facts);
-    pointsOnCircles(points, entities, byId, epsilon, facts);
-    incidences(points, entities, byId, epsilon, facts, budget);
-    tangents(entities, byId, epsilon, facts, budget);
+    pointsOnCircles(points, entities, byId, named, epsilon, facts);
+    incidences(points, entities, byId, named, epsilon, facts, budget);
+    tangents(entities, byId, named, epsilon, facts, budget);
     equalAngles(points, entities, indexById, facts);
-    polygonRelations(entities, byId, scale, epsilon, facts);
+    polygonRelations(entities, byId, named, scale, epsilon, facts);
   }
 
   // Space has its own scale and its own vocabulary; see the module it lives in.
@@ -148,6 +161,7 @@ function report(facts: Facts, truncated: boolean): GeometryInvariantReport {
 function equalSegments(
   entities: readonly GeometryEntity[],
   byId: Map<string, NamedPoint>,
+  named: ReadonlySet<string>,
   epsilon: number,
   facts: Facts,
 ): void {
@@ -161,7 +175,7 @@ function equalSegments(
   buckets.eachPair((one, other) => {
     if (facts.full) return false;
     if (Math.abs(one.length - other.length) <= epsilon) {
-      facts.add(`equal-segments:${pair(name(one.entity, byId), name(other.entity, byId))}`);
+      facts.add(`equal-segments:${pair(name(one.entity, byId, named), name(other.entity, byId, named))}`);
     }
     return true;
   });
@@ -175,6 +189,7 @@ function equalSegments(
 function lineDirections(
   entities: readonly GeometryEntity[],
   byId: Map<string, NamedPoint>,
+  named: ReadonlySet<string>,
   facts: Facts,
 ): void {
   interface Directed { entity: TwoPointEntity; x: number; y: number }
@@ -198,7 +213,7 @@ function lineDirections(
       ? Math.abs(one.x * other.y - one.y * other.x)
       : Math.abs(one.x * other.x + one.y * other.y);
     if (measure / magnitude <= RELATIVE_TOLERANCE) {
-      facts.add(`${relation}:${pair(name(one.entity, byId), name(other.entity, byId))}`);
+      facts.add(`${relation}:${pair(name(one.entity, byId, named), name(other.entity, byId, named))}`);
     }
   };
 
@@ -333,6 +348,7 @@ function pointsOnCircles(
   points: readonly NamedPoint[],
   entities: readonly GeometryEntity[],
   byId: Map<string, NamedPoint>,
+  named: ReadonlySet<string>,
   epsilon: number,
   facts: Facts,
 ): void {
@@ -347,7 +363,7 @@ function pointsOnCircles(
       const distance = Math.hypot(point.x - centre.x, point.y - centre.y);
       if (Math.abs(distance - entity.radius) <= epsilon) {
         on.push(point.name);
-        facts.add(`point-on-circle:${point.name},${entityName(entity, byId)}`);
+        facts.add(`point-on-circle:${point.name},${entityName(entity, byId, named)}`);
       }
     }
     if (on.length >= MIN_CONCYCLIC_POINTS) {
@@ -370,6 +386,7 @@ const MIN_CONCYCLIC_POINTS = 4;
 function tangents(
   entities: readonly GeometryEntity[],
   byId: Map<string, NamedPoint>,
+  named: ReadonlySet<string>,
   epsilon: number,
   facts: Facts,
   budget: Budget,
@@ -400,7 +417,7 @@ function tangents(
       if (Math.abs(distance - circle.radius) > epsilon) continue;
       const along = ((centre.x - from.x) * dx + (centre.y - from.y) * dy) / lengthSquared;
       if (!withinExtent(entity.kind, along, epsilon / length)) continue;
-      facts.add(`tangent:${name(entity, byId)},${entityName(circle, byId)}`);
+      facts.add(`tangent:${name(entity, byId, named)},${entityName(circle, byId, named)}`);
     }
   }
 }
@@ -422,6 +439,7 @@ function incidences(
   points: readonly NamedPoint[],
   entities: readonly GeometryEntity[],
   byId: Map<string, NamedPoint>,
+  named: ReadonlySet<string>,
   epsilon: number,
   facts: Facts,
   budget: Budget,
@@ -446,7 +464,7 @@ function incidences(
       if (offset > epsilon) continue;
       const along = ((point.x - from.x) * dx + (point.y - from.y) * dy) / lengthSquared;
       if (!withinExtent(entity.kind, along, slack)) continue;
-      facts.add(`point-on:${point.name},${name(entity, byId)}`);
+      facts.add(`point-on:${point.name},${name(entity, byId, named)}`);
     }
   }
 }
@@ -552,6 +570,7 @@ function add(map: Map<number, Set<number>>, key: number, value: number): void {
 function polygonRelations(
   entities: readonly GeometryEntity[],
   byId: Map<string, NamedPoint>,
+  named: ReadonlySet<string>,
   scale: number,
   epsilon: number,
   facts: Facts,
@@ -649,7 +668,19 @@ function polygonArea(corners: readonly NamedPoint[]): number {
 /* Reading the figure                                                         */
 /* -------------------------------------------------------------------------- */
 
-function namedPoints(points: Record<string, GeometryPoint>): NamedPoint[] {
+/**
+ * The points a person put there.
+ *
+ * <p>Hidden and locked together is the signature every builder gives an object
+ * it creates on the caller's behalf - the helper that gives a constructed line
+ * its direction, the centre a circle through three points is drawn about.
+ * Marking them states facts about the instrument's working, and since a helper
+ * has no label those facts are named for a raw id: `right-angle:AMp_2iv9tqm...`
+ * is not something a mark scheme can name or a description can read aloud. The
+ * space pass skips a solid's mesh points for the same reason, and the
+ * construction protocol leaves the same objects out of its steps.
+ */
+function allPoints2D(points: Record<string, GeometryPoint>): NamedPoint[] {
   return Object.values(points)
     .filter(isFinite2DPoint)
     .map((point) => ({
@@ -657,6 +688,9 @@ function namedPoints(points: Record<string, GeometryPoint>): NamedPoint[] {
       name: geometryInvariantPointName(point),
       x: point.x,
       y: point.y,
+      // Hidden and locked together is the signature every builder gives an
+      // object it creates on the caller's behalf.
+      machinery: point.hidden === true && point.locked === true,
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
@@ -691,21 +725,41 @@ function direction(
   return { x: to.x - from.x, y: to.y - from.y };
 }
 
-/** `AB` where both ends are labelled, so a mark scheme can name it. */
+/**
+ * `AB` where both ends are named, so a mark scheme can name it.
+ *
+ * <p>A constructed line has only one end anybody placed: the other is the
+ * hidden helper that gives it a direction, and naming the line after that would
+ * produce `perpendicular:AB,Mp_2iv9tqm...`. Such a line is named for the point
+ * it was drawn through instead - `line(M)`, which is how it would be described
+ * out loud - and only an object with no named end at all falls back to its id.
+ */
 function name(
-  entity: { pointIds: [string, string] },
+  entity: { id: string; kind: string; pointIds: [string, string] },
   byId: Map<string, NamedPoint>,
+  named: ReadonlySet<string>,
 ): string {
-  const from = byId.get(entity.pointIds[0]);
-  const to = byId.get(entity.pointIds[1]);
-  if (!from || !to) return '?';
-  return [from.name, to.name].sort().join('');
+  const from = nameable(byId.get(entity.pointIds[0]), named);
+  const to = nameable(byId.get(entity.pointIds[1]), named);
+  if (from && to) return [from.name, to.name].sort().join('');
+  const only = from ?? to;
+  if (!only) return entity.id;
+  return `${entity.kind}(${only.name})`;
+}
+
+/** A point is only worth naming an object after if somebody placed it. */
+function nameable(
+  point: NamedPoint | undefined,
+  named: ReadonlySet<string>,
+): NamedPoint | undefined {
+  return point && named.has(point.id) ? point : undefined;
 }
 
 function entityName(
   entity: { id: string; centerId: string },
   byId: Map<string, NamedPoint>,
+  named: ReadonlySet<string>,
 ): string {
-  const centre = byId.get(entity.centerId);
+  const centre = nameable(byId.get(entity.centerId), named);
   return centre ? `circle(${centre.name})` : entity.id;
 }

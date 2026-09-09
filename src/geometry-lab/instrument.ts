@@ -140,6 +140,7 @@ import { markGeometryExercise, nextGeometryHint } from './exercises.js';
 import type { GeometryExercise, GeometryExerciseHint, GeometryExerciseMark } from './exercises.js';
 import { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
 import type { GeometryConstructionProtocol } from './protocol.js';
+import { describeGeometryLabFigure, geometryLabFigureSummary } from './describe.js';
 
 export { computeGeometryInvariants, RELATIVE_TOLERANCE } from './gradable-invariants.js';
 export type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
@@ -165,6 +166,11 @@ export type {
   GeometryExerciseTask,
 } from './exercises.js';
 export { GEOMETRY_EXERCISE_BANK, geometryExercise } from './exercise-bank.js';
+export {
+  describeGeometryInvariant,
+  describeGeometryLabFigure,
+  geometryLabFigureSummary,
+} from './describe.js';
 export { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
 export type {
   GeometryConstructionProtocol,
@@ -633,6 +639,20 @@ class GeometryLabInstrument implements GeometryLab {
     return formatGeometryConstructionProtocol(this.getConstructionProtocol());
   }
 
+  /**
+   * The figure in words: what it holds, how it was built, what it establishes
+   * and what has been measured. The same text `export({ format: 'text' })`
+   * produces.
+   */
+  describe(): string {
+    return describeGeometryLabFigure(this.#snapshot);
+  }
+
+  /** One sentence naming what the figure holds. */
+  summarize(): string {
+    return geometryLabFigureSummary(this.#snapshot);
+  }
+
   subscribeDelta(listener: (delta: GeometryLabDelta, meta: DeltaMeta) => void): () => void {
     this.#deltaListeners.add(listener);
     return () => this.#deltaListeners.delete(listener);
@@ -784,7 +804,7 @@ class GeometryLabInstrument implements GeometryLab {
       };
     }
     if (options.format === 'text') {
-      const data = geometryLabSummaryText(this.#snapshot);
+      const data = describeGeometryLabFigure(this.#snapshot);
       assertGeometryLabExportOutputComplexity(data, this.#complexityLimits);
       return {
         format: 'text',
@@ -2064,9 +2084,13 @@ class GeometryLabInstrument implements GeometryLab {
 
   #renderSnapshot(snapshot: GeometryLabSnapshot): void {
     if (!this.#root) return;
+    // Focusable here and nowhere else: a mounted figure is the thing a keyboard
+    // user is navigating, whereas an exported one is usually embedded in a page
+    // that has its own tab order and does not want a hundred more stops in it.
+    const options: Partial<ExportOptions> = { format: 'svg', focusableObjects: true };
     const markup = rendersTwoDimensionalScene(snapshot)
-      ? renderGeometryLabSvg2D(snapshot, { format: 'svg' }, this.#renderComplexityLimits)
-      : renderGeometryLabSvg3D(snapshot, { format: 'svg' }, this.#renderComplexityLimits);
+      ? renderGeometryLabSvg2D(snapshot, options, this.#renderComplexityLimits)
+      : renderGeometryLabSvg3D(snapshot, options, this.#renderComplexityLimits);
     this.#root.innerHTML = markup;
   }
 
@@ -2249,25 +2273,6 @@ function geometryLabSnapshotJson(snapshot: GeometryLabSnapshot, includeAppState:
   if (includeAppState) return exported as unknown as JsonValue;
   const { appState: _appState, ...contentOnly } = exported;
   return contentOnly as unknown as JsonValue;
-}
-
-function geometryLabSummaryText(snapshot: GeometryLabSnapshot): string {
-  const scene = snapshot.scene.scene3d;
-  const points = Object.keys(scene.points).length;
-  const entities = Object.values(scene.entities);
-  const solids = entities.filter(entity => entity.kind === 'solid').length;
-  const surfaces = entities.filter(entity => entity.kind === 'surface3d').length;
-  const curves = entities.filter(entity => entity.kind === 'curve3d').length;
-  const measurements = Object.keys(scene.measurements).length;
-  return [
-    'Klein 3D Calculator',
-    `points: ${points}`,
-    `entities: ${entities.length}`,
-    `solids: ${solids}`,
-    `surfaces: ${surfaces}`,
-    `curves: ${curves}`,
-    `measurements: ${measurements}`,
-  ].join('\n');
 }
 
 type WorkPlaneThroughSource = Extract<

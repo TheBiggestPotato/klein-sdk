@@ -1,4 +1,6 @@
 import { KleinSdkError } from '../core/index.js';
+import { geometryLabFigureSummary } from './describe.js';
+import { geometryConstructionProtocol } from './protocol.js';
 import { KLEIN_UI_FONT_STACK } from '../theme/index.js';
 import type { ExportOptions, Vector2, Vector3 } from '../core/index.js';
 import type { GeometryPoint3D } from '../geometry-core/index.js';
@@ -40,6 +42,32 @@ interface CameraProjection3D {
 interface PrimitiveBase {
   depth: number;
   sequence: number;
+  /**
+   * The object this was drawn for, when there is one.
+   *
+   * <p>What turns a picture into something a screen reader can walk: a
+   * `<title>` naming the object and a `<desc>` saying how it was made, rather
+   * than one label on the whole scene saying "geometry scene". Absent for
+   * furniture - the background, a measurement panel - which has nothing to say.
+   */
+  described?: DescribedObject;
+}
+
+/** A name and a sentence for one object in the figure. */
+interface DescribedObject {
+  /**
+   * A short document-unique stem for this object's `<title>` and `<desc>` ids.
+   *
+   * <p>Short on purpose. The object's own id is around fifty characters and
+   * would be written four times per object - twice in `aria-labelledby`, once
+   * on each element - which on a five-hundred-object figure is a hundred
+   * kilobytes of identifier. A per-figure prefix plus an index says the same
+   * thing in a tenth of the space, and the prefix is derived from the figure so
+   * that two Klein drawings on one page still do not collide.
+   */
+  stem: string;
+  title: string;
+  detail?: string;
 }
 
 interface PolygonPrimitive extends PrimitiveBase {
@@ -114,9 +142,21 @@ export function renderGeometryLabSvg3D(
   const height = renderDimension(options.height, DEFAULT_HEIGHT, MIN_HEIGHT);
   const background = options.background === 'transparent' ? 'transparent' : options.background ?? '#ffffff';
   const scene = snapshot.scene.scene3d;
+  const describe = options.describeObjects !== false;
+  const focusable = describe && options.focusableObjects === true;
+  const descriptions = describedObjects(snapshot, describe);
   const projection = createCameraProjection(snapshot, width, height);
   const primitives: SvgPrimitive[] = [];
   let sequence = 0;
+  // The object currently being painted. `enqueueEntity` fans one entity out
+  // into a sheaf of faces or a run of segments through style callbacks that
+  // know nothing about ids, and threading one through all of them would touch
+  // every solid, surface and curve painter for no gain.
+  let current: DescribedObject | undefined;
+  const attach = <T extends SvgPrimitive>(primitive: T): T => {
+    if (current) primitive.described = current;
+    return primitive;
+  };
 
   const enqueuePolygon = (points: readonly Vector3[], style: PolygonStyle3D): void => {
     const viewPoints = pointsToView(points, projection);
@@ -136,7 +176,7 @@ export function renderGeometryLabSvg3D(
       sequence: sequence++,
     };
     if (style.strokeOpacity !== undefined) primitive.strokeOpacity = style.strokeOpacity;
-    primitives.push(primitive);
+    primitives.push(attach(primitive));
   };
 
   const enqueuePolyline = (points: readonly Vector3[], style: PolylineStyle3D): void => {
@@ -159,7 +199,7 @@ export function renderGeometryLabSvg3D(
         sequence: sequence++,
       };
       if (style.strokeOpacity !== undefined) primitive.strokeOpacity = style.strokeOpacity;
-      primitives.push(primitive);
+      primitives.push(attach(primitive));
     }
   };
 
@@ -176,7 +216,7 @@ export function renderGeometryLabSvg3D(
       sequence: sequence++,
     };
     if (point.label !== undefined) primitive.label = point.label;
-    primitives.push(primitive);
+    primitives.push(attach(primitive));
   };
 
   const enqueueText = (point: Vector3, text: string, color: string): void => {
@@ -198,11 +238,15 @@ export function renderGeometryLabSvg3D(
 
   for (const entity of valuesByStableId(scene.entities)) {
     if (entity.hidden) continue;
+    current = descriptions.get(entity.id);
     enqueueEntity(scene, entity, enqueuePolygon, enqueuePolyline);
   }
   for (const point of valuesByStableId(scene.points)) {
-    if (!point.hidden) enqueuePoint(point);
+    if (point.hidden) continue;
+    current = descriptions.get(point.id);
+    enqueuePoint(point);
   }
+  current = undefined;
 
   primitives.sort((first, second) => {
     const depthOrder = second.depth - first.depth;
@@ -210,10 +254,17 @@ export function renderGeometryLabSvg3D(
   });
 
   const builder = new BoundedSvgOutput(limits.maxExportBytes);
-  builder.append(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Klein 3D calculator scene">`);
+  builder.append(svgRoot(
+    width,
+    height,
+    'Klein 3D calculator scene',
+    describe ? geometryLabFigureSummary(snapshot) : null,
+    describe,
+  ));
   builder.append(`<rect width="100%" height="100%" fill="${escapeXml(String(background))}"/>`);
   builder.append(`<g stroke-linecap="round" stroke-linejoin="round" font-family="${KLEIN_UI_FONT_STACK.replace(/"/g, '&quot;')}">`);
-  for (const primitive of primitives) builder.append(renderPrimitive(primitive));
+  const emitted = new Set<string>();
+  for (const primitive of primitives) builder.append(renderPrimitive(primitive, focusable, emitted));
   if (options.includeMeasurements !== false) builder.append(renderMeasurementsSvg(snapshot, width));
   builder.append('</g></svg>');
   const output = builder.toString();
@@ -546,7 +597,151 @@ function averageViewDepth(points: readonly ViewPoint3D[]): number {
   return points.length ? sum / points.length : 0;
 }
 
-function renderPrimitive(primitive: SvgPrimitive): string {
+/**
+ * Wraps a primitive in the group that names it.
+ *
+ * <p>`role="graphics-symbol"` with `aria-labelledby` rather than an
+ * `aria-label`, because a description is a sentence and belongs in a `<desc>`
+ * where it can be read on request instead of announced with the name. The ids
+ * are derived from the object's own id, which is unique across sessions, so two
+ * Klein figures on one page do not collide.
+ */
+function describedGroup(
+  primitive: SvgPrimitive,
+  body: string,
+  focusable: boolean,
+  emitted: Set<string>,
+): string {
+  const described = primitive.described;
+  if (!described) return body;
+  const base = described.stem;
+  const labelledBy = described.detail === undefined ? `${base}t` : `${base}t ${base}d`;
+
+  // One object can be drawn as several primitives - a curve is a run of
+  // segments, a solid a sheaf of faces - and they are depth-sorted, so they are
+  // not next to each other and cannot be one group. The name and the sentence
+  // are written once, on whichever piece is painted first, and the rest point
+  // at them: an id may appear once in a document, and repeating it would make
+  // the file invalid rather than more accessible.
+  const first = !emitted.has(base);
+  emitted.add(base);
+  const labels = first
+    ? `<title id="${base}t">${escapeXml(described.title)}</title>`
+      + (described.detail === undefined ? '' : `<desc id="${base}d">${escapeXml(described.detail)}</desc>`)
+    : '';
+  // Only the first piece is a tab stop, for the same reason: an object is one
+  // thing to arrive at, not one per line segment that draws it.
+  //
+  // The order they are arrived in is the order they are painted - back to
+  // front - because tab order in SVG is document order and the only way to
+  // override it is a positive `tabindex`, which hijacks the tab order of the
+  // whole page the figure lands in. Deterministic, which is what a keyboard
+  // user needs; walking the figure in the order it was *built* would need the
+  // roving-tabindex handling an interaction layer does, which task 5.5 is a
+  // decision about.
+  const tabbable = focusable && first ? ' tabindex="0"' : '';
+  return `<g role="graphics-symbol" aria-labelledby="${labelledBy}"${tabbable}>${labels}${body}</g>`;
+}
+
+/**
+ * Names and stories for every object in the figure, keyed by id.
+ *
+ * <p>Read out of the construction protocol rather than written again here: the
+ * protocol already turns the provenance the model carries into "Construct M,
+ * the midpoint of A and B", and a picture whose descriptions disagreed with the
+ * figure's own account of itself would be worse than one with none. The title
+ * is the short form the protocol assigns - which is a student's own label where
+ * they gave one - and the description is the step.
+ */
+function describedObjects(
+  snapshot: GeometryLabSnapshot,
+  enabled: boolean,
+): Map<string, DescribedObject> {
+  const described = new Map<string, DescribedObject>();
+  if (!enabled) return described;
+  const taken = new Set<string>();
+  for (const step of geometryConstructionProtocol(snapshot).steps) {
+    described.set(step.objectId, {
+      stem: stemFor(step.objectId, taken),
+      title: objectTitle(step.name, step.operation),
+      detail: step.summary,
+    });
+  }
+  return described;
+}
+
+/**
+ * A short stem for one object's element ids, derived from that object's id.
+ *
+ * <p>From the object's own id rather than from its position in the figure, so
+ * that adding an unrelated object does not renumber every element in the file
+ * and turn a diff of two exports into a diff of everything. From a hash of it
+ * rather than the id itself, because a Lab id is around fifty characters and
+ * would be written four times per object.
+ *
+ * <p>Not a security hash and not pretending to be one: it only has to be unique
+ * within the document, and where two ids happen to hash alike the second is
+ * given a suffix, so uniqueness is exact rather than probable.
+ */
+function stemFor(id: string, taken: Set<string>): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < id.length; index += 1) {
+    hash ^= id.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const base = `k${(hash >>> 0).toString(36)}`;
+  let stem = base;
+  for (let suffix = 1; taken.has(stem); suffix += 1) stem = `${base}x${suffix}`;
+  taken.add(stem);
+  return stem;
+}
+
+/**
+ * What the object is called out loud: `Point A`, `Segment AB`, `Circle 1`.
+ *
+ * <p>A student's own label says nothing about what the thing is, so the kind
+ * goes in front of it. A name the protocol had to invent already carries the
+ * kind - it is `circle 1` precisely because nobody named it - and putting the
+ * kind in front of that again gives `Perpendicular line line 1`. The kind is
+ * not lost either way: the description underneath says how the object was made.
+ */
+function objectTitle(name: string, operation: string): string {
+  if (name.includes(' ')) return name.charAt(0).toUpperCase() + name.slice(1);
+  const kind = operation === 'point2d' || operation === 'point3d' ? 'point' : operation;
+  const spaced = kind.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+  return `${spaced.charAt(0).toUpperCase()}${spaced.slice(1)} ${name}`;
+}
+
+/**
+ * The root element.
+ *
+ * <p>`role="graphics-document"` rather than `role="img"` once the objects
+ * inside carry roles of their own: an image is a leaf, and saying a leaf has
+ * structure inside it is a contradiction a screen reader resolves by ignoring
+ * one of them. The `aria-label` stays as well, for anything that does not know
+ * the graphics roles.
+ */
+function svgRoot(
+  width: number,
+  height: number,
+  label: string,
+  summary: string | null,
+  structured: boolean,
+): string {
+  const role = structured ? 'graphics-document' : 'img';
+  const described = summary === null
+    ? ''
+    : `<title id="klein-figure-title">${escapeXml(label)}</title>`
+      + `<desc id="klein-figure-desc">${escapeXml(summary)}</desc>`;
+  const labelled = summary === null ? '' : ' aria-labelledby="klein-figure-title klein-figure-desc"';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="${role}" aria-label="${escapeXml(label)}"${labelled}>${described}`;
+}
+
+function renderPrimitive(primitive: SvgPrimitive, focusable: boolean, emitted: Set<string>): string {
+  return describedGroup(primitive, renderPrimitiveBody(primitive), focusable, emitted);
+}
+
+function renderPrimitiveBody(primitive: SvgPrimitive): string {
   if (primitive.kind === 'polygon') {
     const strokeOpacity = primitive.strokeOpacity === undefined ? '' : ` stroke-opacity="${formatNumber(primitive.strokeOpacity)}"`;
     return `<polygon points="${primitive.points.map(pointToSvg).join(' ')}" fill="${escapeXml(primitive.fill)}" fill-opacity="${formatNumber(primitive.fillOpacity)}" stroke="${escapeXml(primitive.stroke)}"${strokeOpacity} stroke-width="${formatNumber(primitive.strokeWidth)}"/>`;
@@ -717,6 +912,9 @@ export function renderGeometryLabSvg2D(
   const height = renderDimension(options.height, DEFAULT_HEIGHT, MIN_HEIGHT);
   const background = options.background === 'transparent' ? 'transparent' : options.background ?? '#ffffff';
   const scene = snapshot.scene.scene2d;
+  const describe = options.describeObjects !== false;
+  const focusable = describe && options.focusableObjects === true;
+  const descriptions = describedObjects(snapshot, describe);
   const view = snapshot.appState.view2d;
 
   // y grows upward in the scene and downward in SVG, so the vertical axis is
@@ -735,8 +933,11 @@ export function renderGeometryLabSvg2D(
   const LAYER_CURVE = 1;
   const LAYER_LINE = 2;
   const LAYER_POINT = 3;
-  const push = (primitive: UnplacedPrimitive, layer: number): void => {
-    primitives.push({ ...primitive, depth: -layer, sequence: sequence++ } as SvgPrimitive);
+  const push = (primitive: UnplacedPrimitive, layer: number, sourceId?: string): void => {
+    const placed = { ...primitive, depth: -layer, sequence: sequence++ } as SvgPrimitive;
+    const described = sourceId === undefined ? undefined : descriptions.get(sourceId);
+    if (described) placed.described = described;
+    primitives.push(placed);
   };
 
   const pointsFor = (ids: readonly string[]): Vector2[] | null => {
@@ -805,7 +1006,7 @@ export function renderGeometryLabSvg2D(
         fillOpacity: 0.25,
         stroke,
         strokeWidth,
-      }, LAYER_FILL);
+      }, LAYER_FILL, entity.id);
       continue;
     }
 
@@ -822,7 +1023,7 @@ export function renderGeometryLabSvg2D(
         const angle = (index / steps) * Math.PI * 2;
         points.push({ x: screenCenter.x + Math.cos(angle) * radius, y: screenCenter.y + Math.sin(angle) * radius });
       }
-      push({ kind: 'polyline', points, stroke, strokeWidth }, LAYER_CURVE);
+      push({ kind: 'polyline', points, stroke, strokeWidth }, LAYER_CURVE, entity.id);
       continue;
     }
 
@@ -831,7 +1032,7 @@ export function renderGeometryLabSvg2D(
         .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
         .map(toScreen);
       if (points.length < 2) continue;
-      push({ kind: 'polyline', points, stroke, strokeWidth }, LAYER_CURVE);
+      push({ kind: 'polyline', points, stroke, strokeWidth }, LAYER_CURVE, entity.id);
       continue;
     }
 
@@ -851,7 +1052,7 @@ export function renderGeometryLabSvg2D(
         const angle = from + ((to - from) * index) / steps;
         points.push(toScreen({ x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius }));
       }
-      push({ kind: 'polyline', points, stroke, strokeWidth }, LAYER_CURVE);
+      push({ kind: 'polyline', points, stroke, strokeWidth }, LAYER_CURVE, entity.id);
       continue;
     }
 
@@ -860,12 +1061,12 @@ export function renderGeometryLabSvg2D(
       if (!points || points.length < 2) continue;
       const [first, second] = points as [Vector2, Vector2];
       if (entity.kind === 'segment' || entity.kind === 'vector') {
-        push({ kind: 'polyline', points: [first, second], stroke, strokeWidth }, LAYER_LINE);
+        push({ kind: 'polyline', points: [first, second], stroke, strokeWidth }, LAYER_LINE, entity.id);
         continue;
       }
       const span = spanAcrossView(first, second, entity.kind === 'ray');
       if (!span) continue;
-      push({ kind: 'polyline', points: span, stroke, strokeWidth }, LAYER_LINE);
+      push({ kind: 'polyline', points: span, stroke, strokeWidth }, LAYER_LINE, entity.id);
       continue;
     }
 
@@ -882,7 +1083,7 @@ export function renderGeometryLabSvg2D(
         const angle = from + (to - from) * (index / steps);
         arc.push({ x: vertex.x + Math.cos(angle) * radius, y: vertex.y + Math.sin(angle) * radius });
       }
-      push({ kind: 'polyline', points: arc, stroke, strokeWidth: Math.max(1, strokeWidth - 1) }, LAYER_LINE);
+      push({ kind: 'polyline', points: arc, stroke, strokeWidth: Math.max(1, strokeWidth - 1) }, LAYER_LINE, entity.id);
       continue;
     }
   }
@@ -896,7 +1097,7 @@ export function renderGeometryLabSvg2D(
       color: point.color ?? DEFAULT_POINT_COLOR_2D,
     };
     if (point.label !== undefined) primitive.label = point.label;
-    push(primitive, LAYER_POINT);
+    push(primitive, LAYER_POINT, point.id);
   }
 
   primitives.sort((first, second) => {
@@ -905,10 +1106,17 @@ export function renderGeometryLabSvg2D(
   });
 
   const builder = new BoundedSvgOutput(limits.maxExportBytes);
-  builder.append(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Klein 2D geometry scene">`);
+  builder.append(svgRoot(
+    width,
+    height,
+    'Klein 2D geometry scene',
+    describe ? geometryLabFigureSummary(snapshot) : null,
+    describe,
+  ));
   builder.append(`<rect width="100%" height="100%" fill="${escapeXml(String(background))}"/>`);
   builder.append(`<g stroke-linecap="round" stroke-linejoin="round" font-family="${KLEIN_UI_FONT_STACK.replace(/"/g, '&quot;')}">`);
-  for (const primitive of primitives) builder.append(renderPrimitive(primitive));
+  const emitted = new Set<string>();
+  for (const primitive of primitives) builder.append(renderPrimitive(primitive, focusable, emitted));
   builder.append('</g></svg>');
   const output = builder.toString();
   assertGeometryLabExportOutputComplexity(output, limits);

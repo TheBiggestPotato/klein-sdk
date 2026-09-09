@@ -17,7 +17,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 2 - Close the 2D gap | 5 | 5 | Complete |
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 7 | 7 | Complete |
-| 5 - Accessibility and output | 0 | 5 | |
+| 5 - Accessibility and output | 2 | 5 | 5.1 and 5.2 landed; 5.5 is a scope decision, not an implementation |
 | 6 - Mathematical depth | 0 | 5 | |
 
 Run `npm run bench:geometry-lab` for the current numbers, or
@@ -1180,14 +1180,85 @@ School deployment makes this a compliance question as well as a pedagogical one,
 and a good textual description of a figure is transformative for exactly the
 students who currently get nothing.
 
-- [ ] **5.1 Structured SVG semantics.** Today there is one generic
-  `aria-label="Klein 3D calculator scene"` (`renderers.ts:213`). Add per-object
-  `<title>` and `<desc>`, roles, and a deterministic focus order.
-- [ ] **5.2 A real text export.** `geometryLabSummaryText`
-  (`instrument.ts:1611`) returns an object census - `points: 7, entities: 4`.
-  Replace it with a description of the figure: named objects, their relations,
-  and their measurements. Reuse the Phase 4.2 protocol and the 4.3 invariants,
-  so this costs little once those exist.
+- [x] **5.1 Structured SVG semantics.** Every drawn object now carries a
+  `<title>` naming it and a `<desc>` saying how it was made, inside a
+  `role="graphics-symbol"` group; the root is `role="graphics-document"` rather
+  than `role="img"`, because an image is a leaf and saying a leaf has structure
+  inside it is a contradiction a screen reader resolves by ignoring one of them.
+  The old `aria-label` stays for anything that does not know the graphics roles.
+
+  The descriptions are **read out of the construction protocol**, not written
+  again: a picture whose account of itself disagreed with the figure's would be
+  worse than one with none.
+
+  Three details that took measuring or thinking:
+
+  - **A label is written once even though an object is drawn many times.** A
+    circle is sixty-four segments and a solid a sheaf of faces, and they are
+    depth-sorted, so an object's pieces are not next to each other and cannot be
+    one group. The name and sentence go on whichever piece is painted first and
+    the rest point at them with `aria-labelledby`; repeating the id would make
+    the file invalid rather than accessible. A test asserts no id appears twice
+    and that every reference resolves.
+  - **Element ids are keyed to their own object, not to position.** The first
+    version numbered them by step, so adding one unrelated point renumbered
+    every element in the file and a diff of two exports was a diff of
+    everything. They are now a short hash of the object's own id, with an exact
+    collision suffix rather than a probable one.
+  - **Focus order is paint order, and that is a limit rather than a choice.**
+    Tab order in SVG is document order, and the only way to override it is a
+    positive `tabindex`, which hijacks the tab order of the whole page the
+    figure lands in. So it is back to front: deterministic, which is what a
+    keyboard user needs, but not the order the figure was built in. Walking it
+    in construction order needs roving-tabindex handling, which is the
+    interaction layer 5.5 is a decision about.
+
+  `focusableObjects` is **off by default** and on for `mount()`: a mounted
+  figure is the thing being navigated, while an exported one usually lands in a
+  page with its own tab order that does not want a hundred more stops in it.
+
+  Cost, measured: descriptions roughly double render time and triple file size -
+  a 500-object 3D export goes from 2.03 ms to 3.91 ms, and a 400-object 2D
+  figure from 33 KB to 106 KB, which is 0.6% of the 16 MiB export bound. On by
+  default, because accessibility that is off by default does not happen, and
+  `describeObjects: false` is there for a host that wants the smaller file. The
+  benchmark now measures both, as `export-svg-500` and `export-svg-500-plain`,
+  so a change that slows the *drawing* is still caught while the described
+  number moves for reasons of its own.
+- [x] **5.2 A real text export.** `describeGeometryLabFigure`, on the Lab as
+  `describe()` and behind `export({ format: 'text' })`. The census is gone; what
+  comes back is what the figure holds, how it was built, what it establishes and
+  what has been measured. As the task predicted, almost none of it is new work -
+  the steps are the 4.2 protocol and the facts are the 4.3 reporter, and what
+  this adds is English and an order:
+
+  ```
+  A figure with 1 line, 3 points and 1 segment in the plane.
+
+  How it was built:
+  1. Place A at (-4, 0).
+  ...
+  What it establishes:
+  - M is the midpoint of AB.
+  - AB is perpendicular to the line through M.
+  ```
+
+  Two decisions. The description **says when it is partial** rather than looking
+  complete, because a truncated report read aloud as a finished list is worse
+  than no list. And the one-sentence summary **counts what is drawn, not what is
+  stored**: it is what a reader gets *instead of* seeing the figure, so telling
+  them about an object the student hid would be worse than saying nothing. How
+  it was built is a separate section, and a hidden step still appears there.
+
+  **Writing it found two faults in the invariant reporter**, which is the value
+  of making something read aloud. It marked the instrument's own helper points -
+  the hidden one that gives a constructed line its direction - so a figure's
+  facts included `right-angle:AMp_2iv9tqm1hyqr4_479b39...`, unreadable and
+  unnameable by any mark scheme. And an object with such a point at one end was
+  named after it. Helper points are now skipped for marking and naming while
+  still being measured through - a constructed line has no direction without its
+  helper - so `perpendicular:AB,line(M)` is stated, and reads as "AB is
+  perpendicular to the line through M". The 85-figure differential is unchanged.
 - [ ] **5.3 Keyboard construction path.** Every tool reachable without a
   pointer.
 - [ ] **5.4 Export formats.** PNG and PDF (PNG is already flagged unchecked in

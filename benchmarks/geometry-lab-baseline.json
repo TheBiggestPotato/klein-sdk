@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "calibrationMs": 48.7923,
+  "calibrationMs": 50.3244,
   "gcAvailable": true,
   "samples": 25,
   "cases": {
@@ -13,10 +13,10 @@
         "P4"
       ],
       "budgetMs": 4,
-      "medianMs": 2.3343,
-      "normalizedTime": 0.04784,
-      "retainedHeapBytes": 261824,
-      "churnHeapBytes": 2095192,
+      "medianMs": 2.5163,
+      "normalizedTime": 0.05,
+      "retainedHeapBytes": 262616,
+      "churnHeapBytes": 2065936,
       "withinBudget": true
     },
     "drag-fanout-400": {
@@ -26,10 +26,10 @@
         "P3"
       ],
       "budgetMs": 4,
-      "medianMs": 4.4592,
-      "normalizedTime": 0.09139,
-      "retainedHeapBytes": 9559832,
-      "churnHeapBytes": 16187584,
+      "medianMs": 4.8822,
+      "normalizedTime": 0.09701,
+      "retainedHeapBytes": 9559432,
+      "churnHeapBytes": 29869120,
       "withinBudget": false
     },
     "drag-mesh-4-surfaces": {
@@ -38,10 +38,10 @@
         "P11"
       ],
       "budgetMs": 4,
-      "medianMs": 0.3966,
-      "normalizedTime": 0.00813,
-      "retainedHeapBytes": 21272,
-      "churnHeapBytes": 3140064,
+      "medianMs": 0.4031,
+      "normalizedTime": 0.00801,
+      "retainedHeapBytes": 18816,
+      "churnHeapBytes": 3142440,
       "withinBudget": true
     },
     "snapshot-read-mesh": {
@@ -50,40 +50,40 @@
         "P6"
       ],
       "budgetMs": 4,
-      "medianMs": 11.3789,
-      "normalizedTime": 0.23321,
+      "medianMs": 12.13,
+      "normalizedTime": 0.24104,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 27195568,
+      "churnHeapBytes": 27195320,
       "withinBudget": false
     },
     "drag-plane-10-dependents": {
       "title": "Drag a work plane carrying 10 line-plane intersections",
       "findings": [],
       "budgetMs": 4,
-      "medianMs": 0.3266,
-      "normalizedTime": 0.00669,
-      "retainedHeapBytes": 463576,
-      "churnHeapBytes": 13449440,
+      "medianMs": 0.3433,
+      "normalizedTime": 0.00682,
+      "retainedHeapBytes": 466064,
+      "churnHeapBytes": 13452776,
       "withinBudget": true
     },
     "drag-plane-3-cross-sections": {
       "title": "Drag a plane slicing three solids, recutting each section",
       "findings": [],
       "budgetMs": 4,
-      "medianMs": 1.2333,
-      "normalizedTime": 0.02528,
-      "retainedHeapBytes": 909552,
-      "churnHeapBytes": 7792808,
+      "medianMs": 1.3694,
+      "normalizedTime": 0.02721,
+      "retainedHeapBytes": 912696,
+      "churnHeapBytes": 7779312,
       "withinBudget": true
     },
     "drag-20-constraints": {
       "title": "Drag one end of a chain held by 20 fixed-length constraints",
       "findings": [],
       "budgetMs": 4,
-      "medianMs": 0.2854,
-      "normalizedTime": 0.00585,
+      "medianMs": 0.2987,
+      "normalizedTime": 0.00593,
       "retainedHeapBytes": 43904,
-      "churnHeapBytes": 14686360,
+      "churnHeapBytes": 14686384,
       "withinBudget": true
     },
     "delta-roundtrip-500": {
@@ -92,10 +92,10 @@
         "P5"
       ],
       "budgetMs": 0.5,
-      "medianMs": 2.3105,
-      "normalizedTime": 0.04735,
+      "medianMs": 2.4861,
+      "normalizedTime": 0.0494,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 22725824,
+      "churnHeapBytes": 22724040,
       "withinBudget": false
     },
     "snapshot-read-500": {
@@ -104,8 +104,8 @@
         "P6"
       ],
       "budgetMs": 0.5,
-      "medianMs": 0.3703,
-      "normalizedTime": 0.00759,
+      "medianMs": 0.3948,
+      "normalizedTime": 0.00784,
       "retainedHeapBytes": 0,
       "churnHeapBytes": 9326712,
       "withinBudget": true
@@ -114,10 +114,20 @@
       "title": "SVG render of a 500-point 3D scene",
       "findings": [],
       "budgetMs": 16,
-      "medianMs": 1.9637,
-      "normalizedTime": 0.04025,
+      "medianMs": 3.9109,
+      "normalizedTime": 0.07771,
+      "retainedHeapBytes": 69144,
+      "churnHeapBytes": 29847520,
+      "withinBudget": true
+    },
+    "export-svg-500-plain": {
+      "title": "SVG render of a 500-point 3D scene, undescribed",
+      "findings": [],
+      "budgetMs": 16,
+      "medianMs": 2.0293,
+      "normalizedTime": 0.04032,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 28284200,
+      "churnHeapBytes": 22120624,
       "withinBudget": true
     },
     "invariants-24": {
@@ -126,10 +136,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 0.4814,
-      "normalizedTime": 0.00987,
-      "retainedHeapBytes": 50056,
-      "churnHeapBytes": 29033136,
+      "medianMs": 0.6104,
+      "normalizedTime": 0.01213,
+      "retainedHeapBytes": 53312,
+      "churnHeapBytes": 29089664,
       "withinBudget": true
     },
     "invariants-3d": {
@@ -138,10 +148,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 0.284,
-      "normalizedTime": 0.00582,
+      "medianMs": 0.297,
+      "normalizedTime": 0.0059,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 14052136,
+      "churnHeapBytes": 14268864,
       "withinBudget": true
     },
     "invariants-cap": {
@@ -150,10 +160,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 5.0428,
-      "normalizedTime": 0.10335,
-      "retainedHeapBytes": 3264,
-      "churnHeapBytes": 17899896,
+      "medianMs": 5.3159,
+      "normalizedTime": 0.10563,
+      "retainedHeapBytes": 2560,
+      "churnHeapBytes": 18270744,
       "withinBudget": true
     }
   },
@@ -168,10 +178,10 @@
         100,
         400
       ],
-      "smallMs": 0.539,
-      "largeMs": 1.8497,
-      "timeExponent": 0.889,
-      "heapExponent": 0.302,
+      "smallMs": 0.5252,
+      "largeMs": 2.0025,
+      "timeExponent": 0.965,
+      "heapExponent": -1.65,
       "meetsTarget": false
     },
     "scale-drag-fanout": {
@@ -185,10 +195,10 @@
         100,
         400
       ],
-      "smallMs": 1.0831,
-      "largeMs": 4.4606,
-      "timeExponent": 1.021,
-      "heapExponent": 0.986,
+      "smallMs": 1.1517,
+      "largeMs": 5.037,
+      "timeExponent": 1.064,
+      "heapExponent": 0.988,
       "meetsTarget": true
     },
     "scale-snapshot-heap": {
@@ -201,11 +211,11 @@
         100,
         400
       ],
-      "smallMs": 0.0631,
-      "largeMs": 0.2818,
-      "timeExponent": 1.08,
+      "smallMs": 0.064,
+      "largeMs": 0.3039,
+      "timeExponent": 1.124,
       "heapExponent": -0.239,
-      "meetsTarget": true
+      "meetsTarget": false
     }
   }
 }

@@ -553,6 +553,21 @@ export const CASES = [
     },
   },
   {
+    id: 'export-svg-500-plain',
+    // The same figure without per-object descriptions, so the cost of drawing
+    // and the cost of describing are two numbers rather than one. A change that
+    // slows the drawing is still caught here even while the described number
+    // moves for reasons of its own.
+    title: 'SVG render of a 500-point 3D scene, undescribed',
+    findings: [],
+    budgetMs: 16,
+    run() {
+      const { lab } = build3DScene(500);
+      const snapshot = lab.getSnapshot();
+      return () => renderGeometryLabSvg3D(snapshot, { format: 'svg', describeObjects: false }, {});
+    },
+  },
+  {
     id: 'invariants-24',
     // Kept at twenty-four after the cap was raised, so the number stays
     // comparable with every baseline taken before bucketing.
