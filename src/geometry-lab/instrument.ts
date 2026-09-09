@@ -136,6 +136,8 @@ import { checkGeometryGoal } from './goal-check.js';
 import type { GeometryGoalCheck } from './goal-check.js';
 import { detectGeometryConjectures } from './conjectures.js';
 import type { GeometryConjectureOptions, GeometryConjectureReport } from './conjectures.js';
+import { markGeometryExercise, nextGeometryHint } from './exercises.js';
+import type { GeometryExercise, GeometryExerciseHint, GeometryExerciseMark } from './exercises.js';
 import { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
 import type { GeometryConstructionProtocol } from './protocol.js';
 
@@ -145,6 +147,24 @@ export { checkGeometryGoal } from './goal-check.js';
 export type { GeometryGoalCheck } from './goal-check.js';
 export { detectGeometryConjectures } from './conjectures.js';
 export type { GeometryConjectureOptions, GeometryConjectureReport } from './conjectures.js';
+export {
+  geometryExerciseProgress,
+  learnerGeometryExercise,
+  markGeometryExercise,
+  nextGeometryHint,
+} from './exercises.js';
+export type {
+  GeometryExercise,
+  GeometryExerciseAttempt,
+  GeometryExerciseCriterion,
+  GeometryExerciseCriterionResult,
+  GeometryExerciseHint,
+  GeometryExerciseLevel,
+  GeometryExerciseMark,
+  GeometryExerciseProgress,
+  GeometryExerciseTask,
+} from './exercises.js';
+export { GEOMETRY_EXERCISE_BANK, geometryExercise } from './exercise-bank.js';
 export { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
 export type {
   GeometryConstructionProtocol,
@@ -571,6 +591,19 @@ class GeometryLabInstrument implements GeometryLab {
    */
   checkGoal(targetInvariants: readonly GeometryInvariantId[]): GeometryGoalCheck {
     return checkGeometryGoal(this.#snapshot, targetInvariants, this.getInvariants());
+  }
+
+  /** Marks the figure against an exercise, key and rubric included. */
+  markExercise(exercise: GeometryExercise): GeometryExerciseMark {
+    return markGeometryExercise(exercise, this.#snapshot);
+  }
+
+  /**
+   * The next thing to say to a student who is stuck on this exercise, chosen
+   * from what their figure is actually missing.
+   */
+  nextHint(exercise: GeometryExercise, released: readonly string[] = []): GeometryExerciseHint | null {
+    return nextGeometryHint(exercise, this.#snapshot, released);
   }
 
   /**

@@ -2,6 +2,8 @@
 
 Classroom-ready geometry activities for children and teenagers using Klein Geometry Lab. The exercises are grouped by age and difficulty, but teachers can adapt the prompts up or down depending on the class.
 
+> **This pack is also available as data.** `GEOMETRY_EXERCISE_BANK` in `src/geometry-lab/exercise-bank.ts` carries all twenty-four of these exercises as typed objects, with the four things prose cannot hold: the facts a finished figure has to establish, the tools in scope, a hint ladder that responds to what the student's figure is missing, and a mark scheme. Eight of them can be marked automatically; the rest are open activities and say so. Some tasks there name their points explicitly (`label the corners A, B and C`), because a fact is named for the points it is about. **Edit both when you change an exercise** — `tests/geometry-lab/exercises.test.mjs` checks the data, not this file.
+
 ## How To Use This Pack
 
 - Use the 2D tools first for points, lines, polygons, circles, angle marks, measurements, transformations, and constructions.

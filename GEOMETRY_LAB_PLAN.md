@@ -16,7 +16,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
 | 2 - Close the 2D gap | 5 | 5 | Complete |
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
-| 4 - The learning layer | 4 | 7 | 4.1-4.4 landed; 4.5 and 4.6 next, 4.3b split out |
+| 4 - The learning layer | 6 | 7 | Complete but for 4.3b, the 3D invariant vocabulary |
 | 5 - Accessibility and output | 0 | 5 | |
 | 6 - Mathematical depth | 0 | 5 | |
 
@@ -1084,13 +1084,52 @@ this document.
   forty-eight-point one. That is why it is a method a host calls when a marker
   asks a question, and the documentation says so: an idle callback, a worker, a
   "check" button, never a drag.
-- [ ] **4.5 Machine-readable exercises.** `GEOMETRY_LAB_EXERCISES.md` is good
-  content in a dead format: not machine-readable, not tagged to standards, not
-  linked to invariants, no hint ladder, no mastery sequencing, no attempt
-  tracking. Define an exercise as a typed object - target invariant set, allowed
-  tools, hint ladder, rubric - and migrate the bank into it.
-- [ ] **4.6 Hint ladder.** Built on 4.1 and 4.5: from "check the distance from M
-  to each end" up to "use the compass tool on A".
+- [x] **4.5 Machine-readable exercises.** `GEOMETRY_EXERCISE_BANK` in
+  `exercise-bank.ts`: all twenty-four exercises as typed objects, with the
+  target invariant set, the tools in scope, a hint ladder and a mark scheme.
+  `markGeometryExercise` marks a figure against one; `learnerGeometryExercise`
+  is the projection safe to send a student; `geometryExerciseProgress` sequences
+  the bank on prerequisites. On the Lab as `markExercise` and `nextHint`.
+
+  **The keys are verified, not asserted.** An answer key nobody has answered is
+  a guess, so `exercise-models.mjs` builds a model answer for every exercise
+  that carries one - built with the construction tools rather than by placing
+  points where they look right - and the tests check each is marked correct,
+  *and* that every fact in it survives the figure being dragged. Writing them is
+  what caught the targets that were unreachable as first written.
+
+  **Two things changed in the content, deliberately.** Several tasks now say
+  which letters to use: a fact is named for the points it is about, so "mark the
+  midpoint of each side" cannot be marked when nothing said what they were
+  called - and labelling is a good instruction anyway. And **most exercises have
+  no target**, which is a statement rather than an omission: "build a shape
+  garden" is a real activity and there is no invariant that says a garden is
+  finished. Inventing facts to make those look markable would make marking wrong
+  rather than wide. Eight have real keys; every 3D exercise is open because the
+  3D vocabulary is 4.3b.
+
+  **An exercise carries an answer key, so nothing here goes near
+  `src/assessment`** - the same boundary 4.1 ran into. `learnerGeometryExercise`
+  is the split: the prompt, the tools and the hints actually asked for, with the
+  key and the unspent ladder left on the server. A test serializes the
+  projection of every exercise in the bank and asserts no target fact and no
+  unspent hint appears in it, because "the client only shows one rung" is not a
+  security property.
+
+  The exercises that are about *constructing* rather than drawing carry
+  `requireConstruction`, and marking them runs 4.4: a triangle dragged to be
+  equilateral to eleven decimal places is marked wrong, and the mark says which
+  facts held only where the figure was left. That is 4.1, 4.3 and 4.4 doing one
+  job together, and it is the thing none of them could do alone.
+- [x] **4.6 Hint ladder.** `nextGeometryHint(exercise, snapshot, released)`.
+  Chosen from the figure rather than from a counter: the goal check says which
+  facts are absent, and the gentlest unspent rung tied to one of them is what a
+  student gets. A child who has the equal halves but not the right angle is told
+  about the right angle. When nothing is missing it falls back to a rung tied to
+  no fact - general encouragement - and when the ladder is spent it returns
+  nothing rather than repeating itself. Ladders run from "M has to stay halfway
+  along AB when you drag A - does it?" up to "use the midpoint tool on A and B
+  rather than placing a point that looks central".
 
 ## Phase 5 - accessibility and output
 
