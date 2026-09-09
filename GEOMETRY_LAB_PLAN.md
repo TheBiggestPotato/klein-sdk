@@ -922,14 +922,49 @@ this document.
   `checkGeometryGoal`. Giving assessment a geometry answer key needs an
   authoring-side contract that does not exist yet, and that is a decision about
   the assessment module rather than about the Lab.
-- [ ] **4.2 Construction protocol.** A numbered, labelled, replayable step list
-  built from the `construction` provenance already in the model. `history.ts`
-  stores compare-and-set JSON patches for undo and collaboration, and
-  `getHistoryEntries()` in the Calculator (`src/geometry/index.ts:1422`) returns
-  strings like "Previous version (3)" - neither is a construction protocol. This
-  is what lets a teacher see *how* a student built the figure, and what turns a
-  drawing into a proof artifact. Derived, not stored, so it costs no snapshot
-  memory.
+- [x] **4.2 Construction protocol.** `geometryConstructionProtocol(snapshot)`,
+  on the Lab as `getConstructionProtocol` and `formatConstructionProtocol`. A
+  numbered step list read out of the `construction` provenance already in the
+  model, so it costs no snapshot memory and nothing at edit time:
+
+  ```
+  1. Place A at (-4, 0).
+  2. Place B at (4, 0).
+  3. Join A and B with segment AB.
+  4. Construct M, the midpoint of A and B.
+  5. Draw line 1, the line through M perpendicular to AB.
+  ```
+
+  Three decisions carry it.
+
+  - **Machinery is not a step.** Hidden *and* locked together is the signature
+    every builder gives an object it creates on the caller's behalf: the helper
+    point that gives a constructed line its direction, the centre a circle
+    through three points is drawn about. No student ever placed one, so listing
+    them would describe the instrument's working rather than the child's. Hidden
+    *alone* is a styling choice about the student's own point, and that point is
+    still a step they took. The count of what was folded away is reported.
+  - **A point is introduced where it is first used.** The model has no
+    timestamps, so no reading of it recovers the true order; ordering by
+    collection would put every point at the top, which does not read as a
+    protocol. Depth-first post-order over the provenance edges, driven from the
+    objects that use other objects, pulls each point in at the moment it is
+    first needed - which for a figure built in one session reproduces the real
+    build order, and for any other figure is a stated rule rather than a guess.
+  - **`replayable` is a property, not a promise.** True when every step's
+    sources precede it, which is exactly what a replay needs and exactly what a
+    cycle breaks. A figure with circular provenance - which the integrity check
+    forbids, so only a hand-made snapshot has one - still lists every object and
+    says `replayable: false`, because a protocol of a broken figure is a
+    diagnostic.
+
+  It is a protocol of the figure as it *stands*, not a log: delete an object and
+  its step goes, undo and it returns. That is the honest limit of deriving
+  rather than recording, and it is the right trade - a log has to be kept correct
+  through undo, collaborative merges and reloads, and this cannot go stale
+  because there is nothing to go stale. Covers 2D fully, and in 3D covers
+  solids, work planes, cross-sections and the two plane-intersection
+  constructions; a solid's own mesh points are machinery, not sources.
 - [ ] **4.3 Invariant vocabulary - algorithmically, not by adding loops.**
   Missing today: concyclic, tangency, congruent and similar triangles, equal
   angles, incidence, ratio, area equality, and every 3D relation (coplanar,

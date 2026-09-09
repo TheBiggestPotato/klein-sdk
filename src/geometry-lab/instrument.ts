@@ -134,11 +134,19 @@ import { computeGeometryInvariants } from './gradable-invariants.js';
 import type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
 import { checkGeometryGoal } from './goal-check.js';
 import type { GeometryGoalCheck } from './goal-check.js';
+import { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
+import type { GeometryConstructionProtocol } from './protocol.js';
 
 export { computeGeometryInvariants, RELATIVE_TOLERANCE } from './gradable-invariants.js';
 export type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
 export { checkGeometryGoal } from './goal-check.js';
 export type { GeometryGoalCheck } from './goal-check.js';
+export { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
+export type {
+  GeometryConstructionProtocol,
+  GeometryProtocolStep,
+  GeometryProtocolStepKind,
+} from './protocol.js';
 export { compactGeometryLabDelta, compactGeometryLabSnapshot } from './persistence.js';
 export { compileEquationSurface3D } from './equations.js';
 export {
@@ -559,6 +567,21 @@ class GeometryLabInstrument implements GeometryLab {
    */
   checkGoal(targetInvariants: readonly GeometryInvariantId[]): GeometryGoalCheck {
     return checkGeometryGoal(this.#snapshot, targetInvariants, this.getInvariants());
+  }
+
+  /**
+   * How the figure was built, derived from the provenance it already carries.
+   *
+   * <p>A protocol of the figure as it stands rather than a log of what was done
+   * to it, so it cannot go stale and costs nothing until it is asked for.
+   */
+  getConstructionProtocol(): GeometryConstructionProtocol {
+    return geometryConstructionProtocol(this.#snapshot);
+  }
+
+  /** The protocol as numbered lines, which is how one is read on paper. */
+  formatConstructionProtocol(): string {
+    return formatGeometryConstructionProtocol(this.getConstructionProtocol());
   }
 
   subscribeDelta(listener: (delta: GeometryLabDelta, meta: DeltaMeta) => void): () => void {
