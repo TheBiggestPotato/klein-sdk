@@ -35,7 +35,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import {
+  GeometryHitIndex,
   computeGeometryInvariants,
+  geometryLabFigureGeometry,
   createGeometryLab,
   renderGeometryLabSvg3D,
 } from '../dist/geometry-lab/index.js';
@@ -628,6 +630,21 @@ export const SCALING_CASES = [
     build: (size) => {
       const { lab, dragId } = buildFanoutScene(size);
       return (index) => lab.applyDelta({ op: 'updatePoint', id: dragId, changes: { x: index * 0.01 } });
+    },
+  },
+  {
+    id: 'scale-hit-test',
+    // The condition the plan attached to shipping an interaction layer at all:
+    // a pointer move must not read the whole figure. Gated on the exponent
+    // rather than on a time, because that is the claim.
+    title: 'Hit test cost against scene size',
+    findings: [],
+    targetExponent: 0.75,
+    build: (size) => {
+      const { lab } = buildChainScene(size);
+      const geometry = geometryLabFigureGeometry(lab.getSnapshot(), { format: 'svg', width: 640, height: 480 });
+      const index = GeometryHitIndex.build(geometry);
+      return (step) => index.hit({ x: (step * 13) % 640, y: (step * 29) % 480 });
     },
   },
   {

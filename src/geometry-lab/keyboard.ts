@@ -181,6 +181,39 @@ export class GeometryKeyboardSession {
   }
 
   /**
+   * Puts the cursor on an object, as tabbing to it would.
+   *
+   * <p>Here so a pointer can drive the same tool machine a keyboard does. One
+   * state machine and two input devices, rather than two that agree until they
+   * do not - and the pointer gets the spoken prompts for free.
+   */
+  focusObject(id: string | null): GeometryKeyboardState {
+    if (id === null) {
+      this.#focusedId = null;
+      this.#status = 'Nothing selected.';
+      return this.getState();
+    }
+    this.#focusedId = id;
+    const position = this.#positionOf(id);
+    if (position) this.#cursor = { x: round(position.x), y: round(position.y) };
+    this.#status = `${this.#describe(id)}. ${this.#prompt()}`;
+    return this.getState();
+  }
+
+  /** Moves the cursor somewhere, as the arrow keys would. */
+  moveCursorTo(at: Vector2): GeometryKeyboardState {
+    this.#cursor = { x: round(at.x), y: round(at.y) };
+    this.#focusedId = null;
+    this.#status = `Cursor at (${this.#cursor.x}, ${this.#cursor.y}).`;
+    return this.getState();
+  }
+
+  /** Acts on what is under the cursor, as Enter would. */
+  commit(): GeometryKeyPress {
+    return this.#commit();
+  }
+
+  /**
    * Acts on one key.
    *
    * <p>`key` is a `KeyboardEvent.key` value, so a host forwards the event

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "calibrationMs": 50.3244,
+  "calibrationMs": 48.7778,
   "gcAvailable": true,
   "samples": 25,
   "cases": {
@@ -13,10 +13,10 @@
         "P4"
       ],
       "budgetMs": 4,
-      "medianMs": 2.5163,
-      "normalizedTime": 0.05,
-      "retainedHeapBytes": 262616,
-      "churnHeapBytes": 2065936,
+      "medianMs": 2.4363,
+      "normalizedTime": 0.04995,
+      "retainedHeapBytes": 262720,
+      "churnHeapBytes": 2966160,
       "withinBudget": true
     },
     "drag-fanout-400": {
@@ -26,10 +26,10 @@
         "P3"
       ],
       "budgetMs": 4,
-      "medianMs": 4.8822,
-      "normalizedTime": 0.09701,
-      "retainedHeapBytes": 9559432,
-      "churnHeapBytes": 29869120,
+      "medianMs": 4.6847,
+      "normalizedTime": 0.09604,
+      "retainedHeapBytes": 9553848,
+      "churnHeapBytes": 29862392,
       "withinBudget": false
     },
     "drag-mesh-4-surfaces": {
@@ -38,10 +38,10 @@
         "P11"
       ],
       "budgetMs": 4,
-      "medianMs": 0.4031,
-      "normalizedTime": 0.00801,
-      "retainedHeapBytes": 18816,
-      "churnHeapBytes": 3142440,
+      "medianMs": 0.3968,
+      "normalizedTime": 0.00813,
+      "retainedHeapBytes": 12624,
+      "churnHeapBytes": 3139672,
       "withinBudget": true
     },
     "snapshot-read-mesh": {
@@ -50,40 +50,40 @@
         "P6"
       ],
       "budgetMs": 4,
-      "medianMs": 12.13,
-      "normalizedTime": 0.24104,
+      "medianMs": 11.5311,
+      "normalizedTime": 0.2364,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 27195320,
+      "churnHeapBytes": 27195584,
       "withinBudget": false
     },
     "drag-plane-10-dependents": {
       "title": "Drag a work plane carrying 10 line-plane intersections",
       "findings": [],
       "budgetMs": 4,
-      "medianMs": 0.3433,
-      "normalizedTime": 0.00682,
-      "retainedHeapBytes": 466064,
-      "churnHeapBytes": 13452776,
+      "medianMs": 0.3342,
+      "normalizedTime": 0.00685,
+      "retainedHeapBytes": 445264,
+      "churnHeapBytes": 13432912,
       "withinBudget": true
     },
     "drag-plane-3-cross-sections": {
       "title": "Drag a plane slicing three solids, recutting each section",
       "findings": [],
       "budgetMs": 4,
-      "medianMs": 1.3694,
-      "normalizedTime": 0.02721,
-      "retainedHeapBytes": 912696,
-      "churnHeapBytes": 7779312,
+      "medianMs": 1.3342,
+      "normalizedTime": 0.02735,
+      "retainedHeapBytes": 912672,
+      "churnHeapBytes": 7811408,
       "withinBudget": true
     },
     "drag-20-constraints": {
       "title": "Drag one end of a chain held by 20 fixed-length constraints",
       "findings": [],
       "budgetMs": 4,
-      "medianMs": 0.2987,
-      "normalizedTime": 0.00593,
-      "retainedHeapBytes": 43904,
-      "churnHeapBytes": 14686384,
+      "medianMs": 0.29,
+      "normalizedTime": 0.00594,
+      "retainedHeapBytes": 49336,
+      "churnHeapBytes": 14681400,
       "withinBudget": true
     },
     "delta-roundtrip-500": {
@@ -92,10 +92,10 @@
         "P5"
       ],
       "budgetMs": 0.5,
-      "medianMs": 2.4861,
-      "normalizedTime": 0.0494,
+      "medianMs": 2.3668,
+      "normalizedTime": 0.04852,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 22724040,
+      "churnHeapBytes": 22607784,
       "withinBudget": false
     },
     "snapshot-read-500": {
@@ -104,8 +104,8 @@
         "P6"
       ],
       "budgetMs": 0.5,
-      "medianMs": 0.3948,
-      "normalizedTime": 0.00784,
+      "medianMs": 0.385,
+      "normalizedTime": 0.00789,
       "retainedHeapBytes": 0,
       "churnHeapBytes": 9326712,
       "withinBudget": true
@@ -114,20 +114,20 @@
       "title": "SVG render of a 500-point 3D scene",
       "findings": [],
       "budgetMs": 16,
-      "medianMs": 3.9109,
-      "normalizedTime": 0.07771,
-      "retainedHeapBytes": 69144,
-      "churnHeapBytes": 29847520,
+      "medianMs": 3.8234,
+      "normalizedTime": 0.07838,
+      "retainedHeapBytes": 86504,
+      "churnHeapBytes": 30228456,
       "withinBudget": true
     },
     "export-svg-500-plain": {
       "title": "SVG render of a 500-point 3D scene, undescribed",
       "findings": [],
       "budgetMs": 16,
-      "medianMs": 2.0293,
-      "normalizedTime": 0.04032,
+      "medianMs": 2.0025,
+      "normalizedTime": 0.04105,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 22120624,
+      "churnHeapBytes": 22957872,
       "withinBudget": true
     },
     "invariants-24": {
@@ -136,10 +136,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 0.6104,
-      "normalizedTime": 0.01213,
+      "medianMs": 0.4952,
+      "normalizedTime": 0.01015,
       "retainedHeapBytes": 53312,
-      "churnHeapBytes": 29089664,
+      "churnHeapBytes": 29089296,
       "withinBudget": true
     },
     "invariants-3d": {
@@ -148,10 +148,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 0.297,
-      "normalizedTime": 0.0059,
+      "medianMs": 0.2842,
+      "normalizedTime": 0.00583,
       "retainedHeapBytes": 0,
-      "churnHeapBytes": 14268864,
+      "churnHeapBytes": 14099464,
       "withinBudget": true
     },
     "invariants-cap": {
@@ -160,10 +160,10 @@
         "P9"
       ],
       "budgetMs": 8,
-      "medianMs": 5.3159,
-      "normalizedTime": 0.10563,
-      "retainedHeapBytes": 2560,
-      "churnHeapBytes": 18270744,
+      "medianMs": 5.1964,
+      "normalizedTime": 0.10653,
+      "retainedHeapBytes": 2376,
+      "churnHeapBytes": 18204000,
       "withinBudget": true
     }
   },
@@ -178,9 +178,9 @@
         100,
         400
       ],
-      "smallMs": 0.5252,
-      "largeMs": 2.0025,
-      "timeExponent": 0.965,
+      "smallMs": 0.5404,
+      "largeMs": 1.8741,
+      "timeExponent": 0.897,
       "heapExponent": -1.65,
       "meetsTarget": false
     },
@@ -195,10 +195,24 @@
         100,
         400
       ],
-      "smallMs": 1.1517,
-      "largeMs": 5.037,
-      "timeExponent": 1.064,
+      "smallMs": 1.1158,
+      "largeMs": 4.7388,
+      "timeExponent": 1.043,
       "heapExponent": 0.988,
+      "meetsTarget": true
+    },
+    "scale-hit-test": {
+      "title": "Hit test cost against scene size",
+      "findings": [],
+      "targetExponent": 0.75,
+      "sizes": [
+        100,
+        400
+      ],
+      "smallMs": 0.0008,
+      "largeMs": 0.0008,
+      "timeExponent": -0.001,
+      "heapExponent": 0.394,
       "meetsTarget": true
     },
     "scale-snapshot-heap": {
@@ -211,11 +225,11 @@
         100,
         400
       ],
-      "smallMs": 0.064,
-      "largeMs": 0.3039,
-      "timeExponent": 1.124,
+      "smallMs": 0.0683,
+      "largeMs": 0.2997,
+      "timeExponent": 1.066,
       "heapExponent": -0.239,
-      "meetsTarget": false
+      "meetsTarget": true
     }
   }
 }

@@ -1,6 +1,8 @@
 /** Framework-independent Geometry Lab instrument and factory implementation. */
 import { createInstrumentRuntime, KleinSdkError } from '../core/index.js';
 import { svgToPngBlob } from '../export/index.js';
+import { attachGeometryLabPointer } from './interaction.js';
+import type { GeometryPointerAttachment, GeometryPointerOptions } from './interaction.js';
 import type {
   ApplyDeltaOptions,
   Camera3DState,
@@ -210,7 +212,12 @@ export {
   validateGeometryLabSnapshot,
 } from './validation.js';
 export { validateGeometryLabCommand } from './commands.js';
+export { attachGeometryLabPointer } from './interaction.js';
+export type { GeometryPointerAttachment, GeometryPointerOptions } from './interaction.js';
+export { DEFAULT_PICK_RADIUS, GeometryHitIndex } from './hit-test.js';
+export type { GeometryHit } from './hit-test.js';
 export {
+  geometryLabFigureGeometry,
   renderGeometryLabLatex,
   renderGeometryLabPdf,
   renderGeometryLabSvg2D,
@@ -348,6 +355,16 @@ export type GeometryLabOptions = InstrumentOptions<GeometryLabSnapshot, Geometry
   historyByteLimit?: number;
   /** Optional resource-budget overrides for snapshots, deltas, sampling, exports, and history. */
   complexityLimits?: Partial<GeometryLabComplexityLimits>;
+  /**
+   * Whether a mounted figure responds to a pointer and a keyboard.
+   *
+   * <p>Off by default, and that is about not surprising the hosts that already
+   * have their own layer rather than about doubting this one: a second set of
+   * listeners on the same element would handle every click twice. A host with
+   * nothing of its own asks for it here and gets a usable tool; one with its own
+   * layer keeps it, and can still reach `attachGeometryLabPointer` directly.
+   */
+  interactive?: boolean | GeometryPointerOptions;
 };
 
 const GEOMETRY_LAB_TOOLS: ReadonlySet<string> = new Set([
@@ -474,6 +491,8 @@ class GeometryLabInstrument implements GeometryLab {
   #options: Pick<GeometryLabOptions, 'readOnly' | 'onDelta' | 'onError'>;
   #deltaListeners = new Set<(delta: GeometryLabDelta, meta: DeltaMeta) => void>();
   #root: HTMLElement | undefined;
+  #pointer: GeometryPointerAttachment | undefined;
+  readonly #interactive: boolean | GeometryPointerOptions;
   #undoStack: GeometryLabHistoryEntry[] = [];
   #redoStack: GeometryLabHistoryEntry[] = [];
   #historyLimit: number;
@@ -489,7 +508,7 @@ class GeometryLabInstrument implements GeometryLab {
     if (unsupportedOption !== undefined) {
       throw new KleinSdkError(
         'unsupported_geometry_lab_option',
-        `Geometry Lab option "${unsupportedOption}" is not supported. Renderer selection and editor snapping are host-owned.`,
+        `Geometry Lab option "${unsupportedOption}" is not supported. Renderer selection is host-owned; snapping is a setting on "interactive".`,
       );
     }
     if (options.initialView !== undefined && !GEOMETRY_LAB_ACTIVE_VIEWS.has(options.initialView)) {
@@ -498,6 +517,7 @@ class GeometryLabInstrument implements GeometryLab {
         `Unsupported Geometry Lab initialView "${String(options.initialView)}". Use "2d", "3d", or "split".`,
       );
     }
+    this.#interactive = options.interactive ?? false;
     this.#complexityLimits = resolveGeometryLabComplexityLimits(options.complexityLimits);
     this.actorId = geometryLabActorId(options.actorId, this.#complexityLimits.maxIdChars);
     this.#ids = createGeometryLabIdFactory(this.actorId);
@@ -573,11 +593,25 @@ class GeometryLabInstrument implements GeometryLab {
       this.destroy();
       throw error;
     }
+    if (this.#interactive !== false) {
+      this.#pointer = attachGeometryLabPointer(
+        this,
+        root,
+        this.#interactive === true ? {} : this.#interactive,
+      );
+    }
   }
 
   destroy(): void {
+    this.#pointer?.detach();
+    this.#pointer = undefined;
     this.#root?.remove();
     this.#root = undefined;
+  }
+
+  /** The pointer and keyboard session on the mounted figure, if there is one. */
+  get interaction(): GeometryPointerAttachment | undefined {
+    return this.#pointer;
   }
 
   /**

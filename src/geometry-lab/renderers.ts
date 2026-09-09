@@ -60,6 +60,14 @@ interface PrimitiveBase {
    * furniture - the background, a measurement panel - which has nothing to say.
    */
   described?: DescribedObject;
+  /**
+   * The object this was drawn for.
+   *
+   * <p>Separate from `described`, which is the *wording* and can be switched
+   * off: hit testing has to know which object a shape belongs to whether or not
+   * anybody asked for it to be narrated.
+   */
+  sourceId?: string;
 }
 
 /** A name and a sentence for one object in the figure. */
@@ -162,8 +170,10 @@ function collectFigure3D(
   // know nothing about ids, and threading one through all of them would touch
   // every solid, surface and curve painter for no gain.
   let current: DescribedObject | undefined;
+  let currentId: string | undefined;
   const attach = <T extends SvgPrimitive>(primitive: T): T => {
     if (current) primitive.described = current;
+    if (currentId !== undefined) primitive.sourceId = currentId;
     return primitive;
   };
 
@@ -248,14 +258,17 @@ function collectFigure3D(
   for (const entity of valuesByStableId(scene.entities)) {
     if (entity.hidden) continue;
     current = descriptions.get(entity.id);
+    currentId = entity.id;
     enqueueEntity(scene, entity, enqueuePolygon, enqueuePolyline);
   }
   for (const point of valuesByStableId(scene.points)) {
     if (point.hidden) continue;
     current = descriptions.get(point.id);
+    currentId = point.id;
     enqueuePoint(point);
   }
   current = undefined;
+  currentId = undefined;
 
   primitives.sort((first, second) => {
     const depthOrder = second.depth - first.depth;
@@ -941,8 +954,11 @@ function collectFigure2D(
   const LAYER_POINT = 3;
   const push = (primitive: UnplacedPrimitive, layer: number, sourceId?: string): void => {
     const placed = { ...primitive, depth: -layer, sequence: sequence++ } as SvgPrimitive;
-    const described = sourceId === undefined ? undefined : descriptions.get(sourceId);
-    if (described) placed.described = described;
+    if (sourceId !== undefined) {
+      placed.sourceId = sourceId;
+      const described = descriptions.get(sourceId);
+      if (described) placed.described = described;
+    }
     primitives.push(placed);
   };
 
@@ -1177,6 +1193,55 @@ export function rendersTwoDimensionalScene(snapshot: GeometryLabSnapshot): boole
   if (snapshot.appState.activeView === '3d') return false;
   const scene2d = snapshot.scene.scene2d;
   return Object.keys(scene2d.points).length > 0 || Object.keys(scene2d.entities).length > 0;
+}
+
+/**
+ * Where every object is on screen, for anything that needs to answer "what is
+ * under the pointer".
+ *
+ * <p>The same primitives the renderer draws, which is the only way the answer
+ * can be right: hit testing against a second, independent reading of the scene
+ * would disagree with the picture at exactly the places that matter - a
+ * clipped line, a sampled circle, the near plane of a solid.
+ */
+export interface GeometryLabFigureGeometry {
+  readonly width: number;
+  readonly height: number;
+  /** Screen positions of the points, which are what a pointer usually wants. */
+  readonly points: readonly { readonly id: string; readonly at: Vector2 }[];
+  /** Screen polylines for everything else, closed for a filled shape. */
+  readonly paths: readonly {
+    readonly id: string;
+    readonly points: readonly Vector2[];
+    readonly closed: boolean;
+  }[];
+}
+
+/** Reads the figure's screen geometry, drawn exactly as the renderer draws it. */
+export function geometryLabFigureGeometry(
+  snapshot: GeometryLabSnapshot,
+  options: Partial<ExportOptions> = {},
+  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
+): GeometryLabFigureGeometry {
+  const figure = rendersTwoDimensionalScene(snapshot)
+    // Descriptions are the protocol, which hit testing does not need and would
+    // pay for on every view change.
+    ? collectFigure2D(snapshot, { ...options, describeObjects: false }, complexityLimits)
+    : collectFigure3D(snapshot, { ...options, describeObjects: false }, complexityLimits);
+
+  const points: { id: string; at: Vector2 }[] = [];
+  const paths: { id: string; points: Vector2[]; closed: boolean }[] = [];
+  for (const primitive of figure.primitives) {
+    if (primitive.kind === 'point') {
+      if (primitive.sourceId) points.push({ id: primitive.sourceId, at: primitive.point });
+      continue;
+    }
+    if (primitive.kind === 'text') continue;
+    if (primitive.sourceId) {
+      paths.push({ id: primitive.sourceId, points: primitive.points, closed: primitive.kind === 'polygon' });
+    }
+  }
+  return { width: figure.width, height: figure.height, points, paths };
 }
 
 /** Renders the figure as a one-page PDF. */

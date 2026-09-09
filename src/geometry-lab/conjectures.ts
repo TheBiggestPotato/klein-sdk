@@ -1,3 +1,4 @@
+import { isFreeGeometryPoint2D } from '../geometry-core/index.js';
 import type { GeometryPoint2D } from '../geometry-core/index.js';
 import { canonicalizeGeometryLabSnapshot } from './canonicalize.js';
 import {
@@ -173,10 +174,7 @@ export function detectGeometryConjectures(
 function freePointIds(snapshot: GeometryLabSnapshot): string[] {
   const ids: string[] = [];
   for (const point of Object.values(snapshot.scene.scene2d.points)) {
-    if (point.kind !== 'point2d') continue;
-    if (point.construction || point.locked === true) continue;
-    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
-    ids.push(point.id);
+    if (isFreeGeometryPoint2D(point)) ids.push(point.id);
   }
   return ids.sort();
 }

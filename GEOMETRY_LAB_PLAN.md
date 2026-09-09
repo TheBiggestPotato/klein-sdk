@@ -17,7 +17,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 2 - Close the 2D gap | 5 | 5 | Complete |
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 7 | 7 | Complete |
-| 5 - Accessibility and output | 4 | 5 | 5.1-5.4 landed; 5.5 is a scope decision, not an implementation |
+| 5 - Accessibility and output | 5 | 5 | Complete |
 | 6 - Mathematical depth | 0 | 5 | |
 
 Run `npm run bench:geometry-lab` for the current numbers, or
@@ -1331,12 +1331,65 @@ students who currently get nothing.
   kind that rots differently in two places, and a figure that printed correctly
   from one instrument and not the other would be a bug nobody could explain.
   That took 105 lines out of the Calculator and changed no behaviour.
-- [ ] **5.5 Interaction layer decision.** `mount()` sets `innerHTML` to static
-  SVG (`instrument.ts:1424`) and registers no event listeners: no hit testing,
-  no snapping, no drag. The working Lab exists only inside klein-client.
-  Decide explicitly whether the SDK ships an interaction layer - without one it
-  cannot be embedded by a third party as a usable tool. If yes, hit testing must
-  be spatially indexed, not a linear scan per pointer move.
+- [x] **5.5 Interaction layer decision.** **Decided: the SDK ships one.**
+  `attachGeometryLabPointer(lab, element)` in `interaction.ts`, with
+  `createGeometryLab({ interactive: true })` wiring it on mount.
+
+  **One tool machine, two input devices.** The pointer does not get its own
+  state machine; it drives the keyboard session from 5.3 through
+  `focusObject`, `moveCursorTo` and `commit`. A figure built by clicking and a
+  figure built by typing go through one implementation, which also means a
+  pointer user gets the spoken prompts for nothing. Two machines that agreed
+  until they did not is the failure this avoids.
+
+  **The condition the plan attached was met and then measured.** Hit testing is
+  a uniform grid over the screen, built once per figure and queried per pointer
+  move, and it indexes *segments* rather than bounding boxes - a polygon's box
+  can cover the viewport, so bucketing boxes would be a scan wearing a hat.
+  Against an explicit linear scan over the same geometry:
+
+  | objects | indexed query | linear scan | | index build |
+  | --- | --- | --- | --- | --- |
+  | 49 | 0.38 us | 1.20 us | 3.1x | 0.02 ms |
+  | 199 | 0.68 us | 2.55 us | 3.7x | 0.05 ms |
+  | 799 | 1.41 us | 10.7 us | 7.6x | 0.08 ms |
+  | 1999 | 2.89 us | 27.6 us | 9.5x | 0.17 ms |
+
+  The advantage grows with the figure, which is what "not a linear scan" means;
+  the benchmark gates it as `scale-hit-test`, whose growth exponent from 100 to
+  400 objects measures **0.00**. A test asserts the same property against a
+  scan rather than against a stopwatch, because the claim is about growth.
+
+  **The generator lesson repeated itself.** The first version handed candidate
+  cells back as a generator and was only 3.8x better than a scan at 400 objects
+  - most of the index's advantage eaten by iterator machinery on a path that
+  runs on every pointer move. Direct loops with a callback took it to 7.6x. The
+  invariant bucketing learned this in 4.3 and it was worth learning twice, in a
+  file where most queries land on empty cells and the whole call should be a few
+  bounds checks.
+
+  Other decisions worth stating:
+
+  - **Only free points drag.** A constructed point goes where its rule sends it,
+    so dragging one would be undone by the next recomputation - the pointer
+    refuses rather than appearing to work. The rule is now
+    `isFreeGeometryPoint2D` in geometry-core, shared with conjecture detection,
+    which had the same rule written out separately.
+  - **Snapping is on by default.** A vertex a pixel off the line it was meant to
+    be on is the commonest way a figure silently stops being true, and exactly
+    what 4.4 then reports as a coincidence rather than a construction. Grid
+    snapping is available and off.
+  - **The index is dropped on change, not patched.** A changed figure is a
+    different snapshot - the model is copy-on-write, so identity is an exact
+    test rather than a guess - and rebuilding is linear where patching a spatial
+    index correctly for an arbitrary delta is not.
+  - **`interactive` is off by default.** Not doubt about the layer: a host that
+    already has its own would otherwise handle every click twice. One that has
+    nothing asks for it and gets a usable tool.
+
+  The constructor's refusal of `snapEnabled` used to say "editor snapping is
+  host-owned". That is no longer true, and the message now points at the option
+  instead.
 
 ## Phase 6 - mathematical depth
 

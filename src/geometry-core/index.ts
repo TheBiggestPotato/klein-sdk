@@ -1115,6 +1115,20 @@ export function geometryLineLikeEquation2D(
   return lineEquationFrom2DPoints(first, second);
 }
 
+/**
+ * Whether a person can move this point.
+ *
+ * <p>A constructed point is not free - it goes where its rule sends it, and
+ * moving it would be undone by the next recomputation - and a locked point is
+ * pinned on purpose. The same rule decides what a drag may pick up and what a
+ * conjecture check may perturb, which is why it is written once.
+ */
+export function isFreeGeometryPoint2D(point: GeometryPoint | undefined): boolean {
+  if (!point || point.kind !== 'point2d') return false;
+  if (point.construction !== undefined) return false;
+  return point.locked !== true && Number.isFinite(point.x) && Number.isFinite(point.y);
+}
+
 /** Direct source ids for any point/entity in the scene. */
 export function geometryObjectDependencies(scene: GeometryScene, objectId: string): string[] {
   const point = scene.points[objectId];
