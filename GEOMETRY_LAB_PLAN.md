@@ -16,7 +16,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 1 - Make 3D dynamic | 6 | 6 | Complete. Intersections and cross-sections are live; cascade verified |
 | 2 - Close the 2D gap | 5 | 5 | Complete |
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
-| 4 - The learning layer | 6 | 7 | Complete but for 4.3b, the 3D invariant vocabulary |
+| 4 - The learning layer | 7 | 7 | Complete |
 | 5 - Accessibility and output | 0 | 5 | |
 | 6 - Mathematical depth | 0 | 5 | |
 
@@ -965,8 +965,8 @@ this document.
   because there is nothing to go stale. Covers 2D fully, and in 3D covers
   solids, work planes, cross-sections and the two plane-intersection
   constructions; a solid's own mesh points are machinery, not sources.
-- [~] **4.3 Invariant vocabulary - algorithmically, not by adding loops.**
-  *Bucketing and the 2D vocabulary landed; 3D is split out below.*
+- [x] **4.3 Invariant vocabulary - algorithmically, not by adding loops.**
+  *Bucketing and the 2D vocabulary; 3D landed as 4.3b below.*
 
   The nested scans are gone. Every relation here is "two measurements agree to
   within a tolerance", so each quantity - length, direction, angle, area, a
@@ -1032,23 +1032,66 @@ this document.
 
   **Not done, with reasons.**
 
-  - *Concyclic.* Four points on a circle that is drawn is already
-    `point-on-circle` four times, which a mark scheme can ask for. Four points
-    on a circle that is *not* drawn is a search over circumcircles - that is,
-    over triples - which is the cost this task exists to remove. A maximal-set
-    fact (`concyclic:A,B,C,D,E`) would not match an author asking about four of
-    the five, so it would be a fact nobody could use.
+  - *Concyclic.* **Superseded by 4.3b, which added it.** The objection here was
+    that a maximal-set fact would not match an author asking about part of it;
+    4.3b needed the same shape for `coplanar` and answered it properly, by
+    teaching goal checking that some relations hold of every subset. Points
+    concyclic on a circle that is *not* drawn are still out: finding those is a
+    search over triples for the circumcircle they span, which is the cubic cost
+    this task exists to remove.
   - *Ratio.* `ratio:AB,CD=2` carries a value inside the id. Every fact in this
     vocabulary is a boolean whose id names only objects, and both the goal
     checker's canonicaliser and the mark-scheme grammar assume that. Worth doing
     with a grammar that has somewhere to put a number, not by smuggling one in.
-- [ ] **4.3b 3D invariant vocabulary.** `coplanar`, `skew`,
-  `perpendicular-to-plane`, `inscribed`. Split from 4.3 rather than rushed into
-  it: the reporter reads `scene2d` only, and a 3D pass needs its own naming (a
-  work plane is not named by two points), its own figure scale, and a tolerance
-  story per relation. The bucketing primitive 4.3 introduced is what makes it
-  affordable, and `skew` in particular - neither parallel nor intersecting - is
-  a direction bucket lookup rather than a scan.
+- [x] **4.3b 3D invariant vocabulary.** `gradable-invariants-3d.ts`, folded
+  into the same report: `point-on-plane`, `coplanar`, `parallel-planes`,
+  `perpendicular-planes`, `perpendicular-to-plane`, `parallel-to-plane` and
+  `skew`. The shared primitives - tolerances, the fact bound, the work budget,
+  the naming rule - moved to `invariant-support.ts` so the two passes cannot
+  drift on what a tolerance means or what a point is called.
+
+  Three things really are different in space, which is what the split was for.
+
+  - **Its own vocabulary, and that is load-bearing rather than modest.** Naming
+    a 3D segment `AB` the way the plane pass names a 2D one would make
+    `parallel:AB,CD` mean either scene, and a mark scheme could not say which
+    figure it was asking about. Every kind here exists only in space, so the
+    names resolve. A figure with content in both scenes gets both sets of facts
+    and no ambiguous one.
+  - **Its own scale.** A snapshot can hold a millimetre-wide plane figure beside
+    a kilometre-wide solid; measuring one against the other's yardstick would
+    mark a correct construction wrong. A test builds exactly that figure.
+  - **Its own idea of whose points these are.** A cube brings eight mesh
+    vertices and a sphere brings 266. Nobody placed them, and marking them would
+    bury a figure's real facts under its triangulation, so they are skipped the
+    same way the construction protocol skips machinery. Marking a sphere scene
+    costs 0.036 ms; a dense spatial figure - twenty planes, fifty-nine lines -
+    costs 0.34 ms, gated as `invariants-3d`.
+
+  **A claim in the earlier version of this entry was wrong.** It said skewness
+  would be "a direction bucket lookup rather than a scan". It is not: bucketing
+  finds pairs whose measurements *agree*, and skewness is what is left when they
+  disagree in two ways at once, which almost every pair does. Bucketing does the
+  parallel test that rules pairs out; the rest is a scan under the same work
+  budget the incidence scans carry.
+
+  **`concyclic` is reinstated, and `coplanar` is why.** 4.3 left concyclic out
+  because a maximal set - `concyclic:A,B,C,D,E` - is a fact no mark scheme could
+  name, since an author asking about four of the five would not match. Coplanar
+  has exactly the same shape, and rather than drop it too, goal checking learned
+  that some relations hold of every subset: `collinear`, `concyclic` and
+  `coplanar` now match by containment, so the maximal set is stated once and an
+  author names whichever part of it their question is about. That mechanism is
+  what removed the objection, so the earlier decision no longer stands and the
+  fact is back.
+
+  **`inscribed` is not here, for a reason about the model rather than about
+  effort.** It is not one relation but a family - a solid whose vertices lie on
+  another's surface, a solid whose faces touch another's - each needing its own
+  definition. And a solid here is a mesh: the "surface" of a sphere is a
+  polyhedral approximation, so a tolerance story for touching it would be a
+  story about how finely it was sampled rather than about the geometry. That is
+  a decision about the solid model, and it should be made there.
 - [x] **4.4 Conjecture detection.** `detectGeometryConjectures(snapshot,
   options?)`, on the Lab as `detectConjectures`. Perturbs the free points,
   recomputes the figure through the same canonicalisation an edit goes through -

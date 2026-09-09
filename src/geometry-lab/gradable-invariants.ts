@@ -1,6 +1,25 @@
 import type { GeometryEntity, GeometryPoint } from '../geometry-core/index.js';
+import { computeGeometry3DInvariants } from './gradable-invariants-3d.js';
+import {
+  ANGULAR_TOLERANCE,
+  Budget,
+  Facts,
+  MAX_INCIDENCE_TESTS,
+  MAX_INVARIANTS,
+  MAX_POINTS,
+  MIN_FIGURE_SIZE,
+  RELATIVE_TOLERANCE,
+  boundingDiagonal,
+  geometryInvariantPointName,
+  isFinite2DPoint,
+  pair,
+  type GeometryInvariantId,
+} from './invariant-support.js';
 import { ToleranceBuckets } from './tolerance-buckets.js';
 import type { GeometryLabSnapshot } from './types.js';
+
+export { RELATIVE_TOLERANCE, geometryInvariantPointName } from './invariant-support.js';
+export type { GeometryInvariantId } from './invariant-support.js';
 
 /**
  * What a construction can be marked on.
@@ -35,79 +54,6 @@ import type { GeometryLabSnapshot } from './types.js';
  * same one the exhaustive version used, so bucketing changed what is looked at
  * and not what is true.
  */
-
-/**
- * One part in a thousand of the figure's own size. Tight enough that a
- * coincidence is unlikely, loose enough for a point positioned by hand on a
- * touchscreen, which is the instrument this has to be usable with.
- */
-export const RELATIVE_TOLERANCE = 1e-3;
-
-/** Below this the figure is a smudge and nothing can be established about it. */
-const MIN_FIGURE_SIZE = 1e-9;
-
-/**
- * How far two directions may differ and still count as the same one.
- *
- * <p>The comparisons below are on a sine or a cosine rather than on an angle -
- * `|cross| / |a||b|` is the sine of the angle between - so the angle a
- * tolerance of `RELATIVE_TOLERANCE` really permits is its arcsine. Bucketing on
- * the angle has to use that number, or a pair the comparison would accept could
- * land two buckets apart and never be proposed.
- */
-const ANGULAR_TOLERANCE = Math.asin(RELATIVE_TOLERANCE);
-
-/**
- * Bounded so a construction with many points cannot make marking expensive.
- *
- * <p>Bucketing made the point scans quadratic rather than cubic, which is what
- * pays for a cap in the low hundreds instead of at twenty-four. The number is
- * measured rather than chosen: the densest figure the benchmark builds at this
- * size costs about six milliseconds, inside the eight the harness allows, and
- * the next size up does not.
- */
-const MAX_POINTS = 128;
-
-/** The most facts a report will state. */
-const MAX_INVARIANTS = 200;
-
-/**
- * The most facts that will be *found* before the scan gives up.
- *
- * <p>Raising the point cap raises the number of facts a pathological figure can
- * hold: two hundred points on one line are a million collinear triples, and
- * generating them all to then report two hundred is work nobody asked for.
- * Deliberately several times `MAX_INVARIANTS`, so that a figure with a
- * reasonable number of facts is reported exactly as it was before this bound
- * existed - sorted, then cut to two hundred - and only a figure already far
- * past what can be reported is affected. Either way the report says it was
- * truncated.
- */
-const MAX_SCANNED_INVARIANTS = MAX_INVARIANTS * 4;
-
-/**
- * How many point-against-object tests the incidence and tangency scans may do.
- *
- * <p>Those two are the relations bucketing does not help with: "is this point
- * on that line" is a point against an object rather than two measurements
- * agreeing, so there is no quantity to bucket on without building a spatial
- * index. They cost objects times points, and unlike the pair scans the fact
- * bound does not stop them - a figure can hold a thousand segments that no
- * point lies on, and finding that out is the whole cost. Bounding the work
- * directly is the honest version: past this, the scan stops and the report says
- * it was truncated, which is what every other bound here does.
- */
-const MAX_INCIDENCE_TESTS = 50_000;
-
-/**
- * A fact about the figure, written so an author can name it in a mark scheme
- * without knowing anything about this file: `equal-segments:AB,CD`,
- * `right-angle:ABC`, `point-on-circle:P,c`.
- *
- * <p>Labels are used where a point has one, because `equal-segments:AB,CD` is
- * something a teacher can write and `equal-segments:p_7f3a,p_9c1b` is not.
- */
-export type GeometryInvariantId = string;
 
 export interface GeometryInvariantReport {
   readonly toolKey: 'geometry-lab';
@@ -154,26 +100,44 @@ export function computeGeometryInvariants(
     .slice()
     .sort((left, right) => left.id.localeCompare(right.id));
 
-  const scale = figureSize(points);
+  const scale = boundingDiagonal(points);
   const facts = new Facts();
-  if (points.length === 0 || scale < MIN_FIGURE_SIZE) {
-    return report(facts, truncated);
-  }
-  const epsilon = scale * RELATIVE_TOLERANCE;
-  const byId = new Map(points.map((point) => [point.id, point]));
-  const indexById = new Map(points.map((point, index) => [point.id, index]));
-
-  equalSegments(entities, byId, epsilon, facts);
-  lineDirections(entities, byId, facts);
-  pointTriples(points, epsilon, facts);
-  pointsOnCircles(points, entities, byId, epsilon, facts);
   const budget = new Budget(MAX_INCIDENCE_TESTS);
-  incidences(points, entities, byId, epsilon, facts, budget);
-  tangents(entities, byId, epsilon, facts, budget);
-  equalAngles(points, entities, indexById, facts);
-  polygonRelations(entities, byId, scale, epsilon, facts);
 
-  return report(facts, truncated || budget.spent);
+  // A figure can hold both scenes, or only one. A pure 3D construction has no
+  // 2D points at all, so the plane pass is skipped rather than the whole
+  // marking abandoned.
+  if (points.length > 0 && scale >= MIN_FIGURE_SIZE) {
+    const epsilon = scale * RELATIVE_TOLERANCE;
+    const byId = new Map(points.map((point) => [point.id, point]));
+    const indexById = new Map(points.map((point, index) => [point.id, index]));
+
+    equalSegments(entities, byId, epsilon, facts);
+    lineDirections(entities, byId, facts);
+    pointTriples(points, epsilon, facts);
+    pointsOnCircles(points, entities, byId, epsilon, facts);
+    incidences(points, entities, byId, epsilon, facts, budget);
+    tangents(entities, byId, epsilon, facts, budget);
+    equalAngles(points, entities, indexById, facts);
+    polygonRelations(entities, byId, scale, epsilon, facts);
+  }
+
+  // Space has its own scale and its own vocabulary; see the module it lives in.
+  const spaceTruncated = computeGeometry3DInvariants(snapshot.scene.scene3d, facts, budget);
+
+  return report(facts, truncated || spaceTruncated || budget.spent);
+}
+
+function report(facts: Facts, truncated: boolean): GeometryInvariantReport {
+  const invariants = facts.sorted();
+  return {
+    toolKey: 'geometry-lab',
+    // Bounded, and the bound is reported: a mark scheme naming a fact that
+    // fell off the end must not look like a fact that failed.
+    invariants: invariants.slice(0, MAX_INVARIANTS),
+    relativeTolerance: RELATIVE_TOLERANCE,
+    truncated: truncated || facts.full || invariants.length > MAX_INVARIANTS,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -349,7 +313,22 @@ function pointTriples(
 /* Circles                                                                    */
 /* -------------------------------------------------------------------------- */
 
-/** A point on a circle: the other half of a compass construction. */
+/**
+ * A point on a circle - the other half of a compass construction - and the sets
+ * of points that are therefore concyclic.
+ *
+ * <p>`concyclic` is stated for the whole set of points on a circle rather than
+ * for every four of them: a circle with ten points on it has two hundred and
+ * ten four-element subsets, and stating them all would fill a report with one
+ * fact restated. Goal checking knows the relation is closed under subsets, so
+ * an author asking about four of the ten still marks. That mechanism is what
+ * makes the fact worth stating at all - without it, a maximal set would be a
+ * fact no mark scheme could name.
+ *
+ * <p>Points concyclic on a circle that is <em>not</em> in the figure are still
+ * not reported: finding those is a search over triples for the circumcircle
+ * they span, which is the cubic cost bucketing exists to remove.
+ */
 function pointsOnCircles(
   points: readonly NamedPoint[],
   entities: readonly GeometryEntity[],
@@ -361,16 +340,24 @@ function pointsOnCircles(
     if (entity.kind !== 'circle') continue;
     const centre = byId.get(entity.centerId);
     if (!centre) continue;
+    const on: string[] = [];
     for (const point of points) {
       if (facts.full) return;
       if (point.id === centre.id) continue;
       const distance = Math.hypot(point.x - centre.x, point.y - centre.y);
       if (Math.abs(distance - entity.radius) <= epsilon) {
+        on.push(point.name);
         facts.add(`point-on-circle:${point.name},${entityName(entity, byId)}`);
       }
     }
+    if (on.length >= MIN_CONCYCLIC_POINTS) {
+      facts.add(`concyclic:${on.slice().sort().join(',')}`);
+    }
   }
 }
+
+/** The fewest points worth calling concyclic: any three non-collinear ones are. */
+const MIN_CONCYCLIC_POINTS = 4;
 
 /**
  * A line that touches a circle without crossing it.
@@ -658,111 +645,13 @@ function polygonArea(corners: readonly NamedPoint[]): number {
 /* Collecting                                                                 */
 /* -------------------------------------------------------------------------- */
 
-/** A count of work still allowed, so an unbounded scan stops rather than runs. */
-class Budget {
-  #left: number;
-  #spent = false;
-
-  constructor(total: number) {
-    this.#left = total;
-  }
-
-  /** Takes `amount` from the budget, or reports that there is not enough left. */
-  spend(amount: number): boolean {
-    if (this.#left < amount) {
-      this.#spent = true;
-      return false;
-    }
-    this.#left -= amount;
-    return true;
-  }
-
-  /** True once a scan had to be cut short, which makes the report truncated. */
-  get spent(): boolean {
-    return this.#spent;
-  }
-}
-
-/** The facts found so far, and whether the scan gave up before finding them all. */
-class Facts {
-  readonly #found = new Set<GeometryInvariantId>();
-  #overflowed = false;
-
-  add(invariant: GeometryInvariantId): void {
-    if (this.#found.has(invariant)) return;
-    if (this.#found.size >= MAX_SCANNED_INVARIANTS) {
-      this.#overflowed = true;
-      return;
-    }
-    this.#found.add(invariant);
-  }
-
-  /** True once the scan has stopped being worth continuing. */
-  get full(): boolean {
-    return this.#overflowed;
-  }
-
-  sorted(): GeometryInvariantId[] {
-    return [...this.#found].sort();
-  }
-}
-
-function report(facts: Facts, truncated: boolean): GeometryInvariantReport {
-  const invariants = facts.sorted();
-  return {
-    toolKey: 'geometry-lab',
-    // Bounded, and the bound is reported: a mark scheme naming a fact that
-    // fell off the end must not look like a fact that failed.
-    invariants: invariants.slice(0, MAX_INVARIANTS),
-    relativeTolerance: RELATIVE_TOLERANCE,
-    truncated: truncated || facts.full || invariants.length > MAX_INVARIANTS,
-  };
-}
-
 /* -------------------------------------------------------------------------- */
 /* Reading the figure                                                         */
 /* -------------------------------------------------------------------------- */
 
-/**
- * The size of the figure, used as the yardstick every comparison is relative
- * to. The diagonal of the bounding box rather than, say, the largest
- * coordinate, so a figure drawn far from the origin is not treated as an
- * enormous one.
- */
-function figureSize(points: readonly NamedPoint[]): number {
-  if (points.length < 2) return 0;
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const point of points) {
-    minX = Math.min(minX, point.x);
-    minY = Math.min(minY, point.y);
-    maxX = Math.max(maxX, point.x);
-    maxY = Math.max(maxY, point.y);
-  }
-  return Math.hypot(maxX - minX, maxY - minY);
-}
-
-/**
- * What a point is called in an invariant id: a label if the child gave one,
- * because `equal-segments:AB,CD` is what a teacher writes in a mark scheme and
- * an internal id is not.
- *
- * <p>Shared with goal checking, which has to split these names back out of a
- * run-together `AB` and would read the wrong figure if it named points
- * differently from the reporter.
- */
-export function geometryInvariantPointName(point: GeometryPoint): string {
-  return point.label && point.label.trim() !== '' ? point.label.trim() : point.id;
-}
-
 function namedPoints(points: Record<string, GeometryPoint>): NamedPoint[] {
   return Object.values(points)
-    .filter((point): point is GeometryPoint & { x: number; y: number } =>
-      point.kind === 'point2d'
-      && Number.isFinite((point as { x?: number }).x)
-      && Number.isFinite((point as { y?: number }).y))
+    .filter(isFinite2DPoint)
     .map((point) => ({
       id: point.id,
       name: geometryInvariantPointName(point),
@@ -800,15 +689,6 @@ function direction(
   const to = byId.get(entity.pointIds[1]);
   if (!from || !to) return null;
   return { x: to.x - from.x, y: to.y - from.y };
-}
-
-/**
- * Two names in a fixed order. Without this the fact would be
- * `equal-segments:AB,CD` or `equal-segments:CD,AB` depending on iteration
- * order, and a mark scheme naming one would silently fail against the other.
- */
-function pair(left: string, right: string): string {
-  return left <= right ? `${left},${right}` : `${right},${left}`;
 }
 
 /** `AB` where both ends are labelled, so a mark scheme can name it. */

@@ -263,6 +263,31 @@ export function buildConstrainedScene(constraintCount) {
 }
 
 /** A 2D figure sized for the invariant reporter, whose own cap is 24 points. */
+/** A spatial figure with many planes and many lines, plus a solid to be skipped. */
+export function build3DInvariantScene(planeCount, pointCount) {
+  const lab = createGeometryLab();
+  for (let index = 0; index < planeCount; index += 1) {
+    lab.addWorkPlaneByEquation(
+      { a: Math.cos(index), b: Math.sin(index), c: 1, d: -index },
+      { label: `p${index}` },
+    );
+  }
+  const ids = [];
+  for (let index = 0; index < pointCount; index += 1) {
+    ids.push(lab.addPoint3D({
+      x: Math.cos(index * 1.7) * 30,
+      y: Math.sin(index * 2.3) * 30,
+      z: (index % 7) * 4,
+      label: `Q${index}`,
+    }));
+  }
+  for (let index = 0; index + 1 < pointCount; index += 1) {
+    lab.addSegment3D(ids[index], ids[index + 1]);
+  }
+  lab.addPolyhedron('cube', { x: 60, y: 60, z: 60 }, 4);
+  return lab;
+}
+
 export function buildInvariantScene(pointCount) {
   const lab = createGeometryLab();
   const deltas = [];
@@ -536,6 +561,19 @@ export const CASES = [
     budgetMs: 8,
     run() {
       const lab = buildInvariantScene(24);
+      const snapshot = lab.getSnapshot();
+      return () => computeGeometryInvariants(snapshot);
+    },
+  },
+  {
+    id: 'invariants-3d',
+    // Space has its own vocabulary and its own scans; a solid's mesh points are
+    // skipped, which is most of what makes this affordable.
+    title: 'computeGeometryInvariants over a spatial figure',
+    findings: ['P9'],
+    budgetMs: 8,
+    run() {
+      const lab = build3DInvariantScene(20, 60);
       const snapshot = lab.getSnapshot();
       return () => computeGeometryInvariants(snapshot);
     },

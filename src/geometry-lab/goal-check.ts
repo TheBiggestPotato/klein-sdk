@@ -82,12 +82,23 @@ export function checkGeometryGoal(
   }
 
   const established = new Set<string>();
-  for (const invariant of report.invariants) established.add(reader(invariant).canonical);
+  const closed = new Map<string, Set<string>[]>();
+  for (const invariant of report.invariants) {
+    const canonical = reader(invariant).canonical;
+    established.add(canonical);
+    const listed = subsetClosed(canonical);
+    if (listed) {
+      const existing = closed.get(listed.kind);
+      if (existing) existing.push(listed.members);
+      else closed.set(listed.kind, [listed.members]);
+    }
+  }
 
   for (const target of targetInvariants) {
     // Reported back in the goal's spelling rather than the reporter's, so an
     // author reads their own mark scheme rather than this file's conventions.
-    (established.has(reader(target).canonical) ? met : missing).push(target);
+    const canonical = reader(target).canonical;
+    (established.has(canonical) || containedInClosed(canonical, closed) ? met : missing).push(target);
   }
 
   const extra: GeometryInvariantId[] = [];
@@ -96,7 +107,7 @@ export function checkGeometryGoal(
   if (goalObjects.size > 0) {
     for (const invariant of report.invariants) {
       const read = reader(invariant);
-      if (required.has(read.canonical)) continue;
+      if (required.has(read.canonical) || answersAClosedGoal(read.canonical, required)) continue;
       // An invariant whose objects cannot be read is left out rather than
       // guessed at: it would be reported against an exercise it may not concern.
       if (read.objects.length === 0) continue;
@@ -112,6 +123,69 @@ export function checkGeometryGoal(
     incomplete: missing.length > 0 && report.truncated,
     relativeTolerance: report.relativeTolerance,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Relations that hold of every subset                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Kinds where naming more points than were asked about still answers the
+ * question.
+ *
+ * <p>Four points on a circle are concyclic, and so is any three of them; the
+ * same is true of coplanarity and of collinearity. The reporter states the
+ * <b>whole</b> set of points on a circle or a plane rather than every subset,
+ * because a circle with ten points on it has two hundred and ten four-element
+ * subsets and listing them would fill a report with one fact restated. That
+ * only works if a mark scheme asking about four of the ten still marks, which
+ * is what this is.
+ *
+ * <p>Not every relation is like this - three equal segments do not make any two
+ * of them "the pair that was asked for" in the same sense - so the rule is a
+ * list rather than a default.
+ */
+const SUBSET_CLOSED_KINDS = new Set(['collinear', 'concyclic', 'coplanar']);
+
+function subsetClosed(canonical: string): { kind: string; members: Set<string> } | null {
+  const colon = canonical.indexOf(':');
+  if (colon < 0) return null;
+  const kind = canonical.slice(0, colon);
+  if (!SUBSET_CLOSED_KINDS.has(kind)) return null;
+  return { kind, members: new Set(canonical.slice(colon + 1).split(',')) };
+}
+
+/** Whether a goal names a subset of something the figure established. */
+function containedInClosed(canonical: string, closed: Map<string, Set<string>[]>): boolean {
+  const goal = subsetClosed(canonical);
+  if (!goal) return false;
+  for (const established of closed.get(goal.kind) ?? []) {
+    let all = true;
+    for (const member of goal.members) {
+      if (!established.has(member)) { all = false; break; }
+    }
+    if (all) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether an established fact is the one a subset goal was asking for, and so
+ * is not something the figure has "as well".
+ */
+function answersAClosedGoal(canonical: string, required: ReadonlySet<string>): boolean {
+  const fact = subsetClosed(canonical);
+  if (!fact) return false;
+  for (const target of required) {
+    const goal = subsetClosed(target);
+    if (!goal || goal.kind !== fact.kind) continue;
+    let all = true;
+    for (const member of goal.members) {
+      if (!fact.members.has(member)) { all = false; break; }
+    }
+    if (all) return true;
+  }
+  return false;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -200,7 +274,9 @@ function readInvariant(
       const arms = [first, third].sort();
       return { canonical: `${kind}:${arms[0]}${vertex}${arms[1]}`, objects: segmented };
     }
-    case 'collinear': {
+    case 'collinear':
+    case 'concyclic':
+    case 'coplanar': {
       const parts = args.split(',').map((part) => part.trim());
       if (parts.length < 2) return literal();
       return {

@@ -339,3 +339,20 @@ test('a polygon name that could be read at two corner counts is refused', () => 
     'and the ambiguous one is refused rather than guessed',
   );
 });
+
+test('a relation that holds of every subset marks when a mark scheme names fewer', () => {
+  const figure = snapshot(
+    { O: [0, 0], A: [10, 0], B: [0, 10], C: [-10, 0], D: [0, -10] },
+    { c1: { id: 'c1', kind: 'circle', centerId: 'O', radius: 10 } },
+  );
+  assert.equal(checkGeometryGoal(figure, ['concyclic:A,B,C,D']).satisfied, true);
+  assert.equal(checkGeometryGoal(figure, ['concyclic:A,B,C']).satisfied, true, 'three of the four');
+  assert.equal(checkGeometryGoal(figure, ['concyclic:D,B,A']).satisfied, true, 'in any order');
+  assert.equal(checkGeometryGoal(figure, ['concyclic:A,B,O']).satisfied, false, 'the centre is not on it');
+});
+
+test('collinearity is subset-closed too, and always was', () => {
+  const figure = snapshot({ A: [0, 0], B: [1, 1], C: [2, 2], D: [5, 0] });
+  assert.equal(checkGeometryGoal(figure, ['collinear:A,B,C']).satisfied, true);
+  assert.equal(checkGeometryGoal(figure, ['collinear:A,C,D']).satisfied, false);
+});

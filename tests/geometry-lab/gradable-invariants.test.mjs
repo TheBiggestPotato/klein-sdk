@@ -422,3 +422,24 @@ test('a construction is marked the same however large it is drawn', () => {
     computeGeometryInvariants(build(1)).invariants,
   );
 });
+
+test('points on a circle are concyclic, stated once for the whole set', () => {
+  // Reinstated with task 4.3b: the fact was left out of 4.3 because a maximal
+  // set is one no mark scheme could name, and subset matching in goal checking
+  // is what removed that objection.
+  const report = computeGeometryInvariants(snapshot(
+    { O: [0, 0], A: [10, 0], B: [0, 10], C: [-10, 0], D: [0, -10], E: [3, 3] },
+    { c1: { id: 'c1', kind: 'circle', centerId: 'O', radius: 10 } },
+  ));
+  assert.ok(report.invariants.includes('concyclic:A,B,C,D'));
+  assert.equal(report.invariants.filter(fact => fact.startsWith('concyclic:')).length, 1);
+  assert.ok(!report.invariants.includes('concyclic:A,B,C,D,E'), 'E is inside the circle');
+});
+
+test('three points on a circle are not worth calling concyclic', () => {
+  const report = computeGeometryInvariants(snapshot(
+    { O: [0, 0], A: [10, 0], B: [0, 10], C: [-10, 0] },
+    { c1: { id: 'c1', kind: 'circle', centerId: 'O', radius: 10 } },
+  ));
+  assert.ok(!report.invariants.some(fact => fact.startsWith('concyclic:')), 'any three non-collinear points are');
+});
