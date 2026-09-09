@@ -28,6 +28,27 @@ export type GeometryConstruction =
   | { kind: 'transformedPoint'; sourceId: string; transform: GeometryTransform2D }
   | { kind: 'linePlaneIntersection'; lineEntityId: string; planeId: string }
   | { kind: 'planePlaneIntersection'; firstPlaneId: string; secondPlaneId: string; end: 0 | 1 }
+  /**
+   * A point placed along an object rather than at a position.
+   *
+   * <p>`at` runs from 0 to 1 over the object as drawn - end to end of a
+   * segment, once round a circle, round the perimeter of a polygon - so that
+   * one number describes a position on any of them. When a slider supplies the
+   * number, the point sweeps as the slider moves, which is what a locus is
+   * traced by.
+   */
+  | { kind: 'pointOnPath'; entityId: string; at: number; sliderId?: string }
+  /**
+   * The path a point traces as a slider sweeps its whole range.
+   *
+   * <p>A locus used to be a list of coordinates somebody had computed
+   * elsewhere, which made it a picture of a locus rather than one: the points
+   * stayed where they were put when the figure moved. This samples the tracer
+   * as the driver sweeps, so the curve follows the construction that generates
+   * it - which is the entire reason conics and envelopes are worth doing on a
+   * screen.
+   */
+  | { kind: 'dynamicLocus'; sliderId: string; tracerId: string; samples: number }
   | { kind: 'custom'; sourceIds: string[]; label?: string };
 
 /**
@@ -270,6 +291,39 @@ export interface GeometryScene {
   points: Record<string, GeometryPoint>;
   entities: Record<string, GeometryEntity>;
   constraints?: Record<string, GeometryConstraint>;
+  /**
+   * Named numbers the figure can be built on.
+   *
+   * <p>Optional so that every snapshot written before they existed stays valid
+   * without a migration, which is the same reason `constraints` is.
+   */
+  sliders?: Record<string, GeometrySlider>;
+}
+
+/**
+ * A number with a range, which the figure can be a function of.
+ *
+ * <p>The thing that turns a drawing into an experiment: a point placed at a
+ * position is one figure, and a point placed at a *parameter* is every figure
+ * that parameter can produce. Conics, envelopes and loci are all this and
+ * nothing else, which is why the word appeared once in the whole codebase, as
+ * an enum member with nothing behind it.
+ *
+ * <p>Deliberately the same shape as the graphing instrument's slider, because
+ * a student who has met one has met the other.
+ */
+export interface GeometrySlider {
+  id: string;
+  /** What it is called, which is how a construction refers to it. */
+  name: string;
+  value: number;
+  min: number;
+  max: number;
+  /** The granularity a control should move in. Zero means continuous. */
+  step: number;
+  label?: string;
+  color?: string;
+  hidden?: boolean;
 }
 
 /** Direct geometry dependencies for each object id and reverse dependent lookup. */
@@ -421,6 +475,10 @@ export function geometryConstructionSourceIds(construction: GeometryConstruction
       return uniqueStrings([construction.circleId, construction.throughPointId]);
     case 'transformedPoint':
       return uniqueStrings([construction.sourceId, ...geometryTransform2DSourceIds(construction.transform)]);
+    case 'pointOnPath':
+      return uniqueStrings([construction.entityId, ...(construction.sliderId ? [construction.sliderId] : [])]);
+    case 'dynamicLocus':
+      return uniqueStrings([construction.sliderId, construction.tracerId]);
     case 'linePlaneIntersection':
       return uniqueStrings([construction.lineEntityId, construction.planeId]);
     case 'planePlaneIntersection':
@@ -1668,6 +1726,165 @@ export function geometryDependentsOf(scene: GeometryScene, changedIds: Iterable<
   return [...visited];
 }
 
+/**
+ * The most samples one locus will take, so a figure cannot make an edit
+ * unaffordable by asking for a smooth curve.
+ */
+export const MAX_LOCUS_SAMPLES = 256;
+
+/**
+ * Sweeps the driver and records where the tracer goes.
+ *
+ * <p><b>Only the tracer's own chain is recomputed, not the scene.</b> A locus is
+ * dozens of recomputations inside one edit, so doing them over the whole figure
+ * would make a five-hundred-object scene unusable the moment a locus was added
+ * to it. Scoped recomputation was measured as *slower* than a full pass for an
+ * ordinary edit and rejected on that evidence (task 0.3); this is the case it
+ * was actually right for, and the difference is which way the sizes point - a
+ * whole scene recomputed sixty-four times against a handful of objects
+ * recomputed sixty-four times.
+ *
+ * <p>Samples are taken on a copy, so nothing the sweep does to the driver
+ * survives it: the figure is left showing the configuration the student left it
+ * in, with the curve of all the others drawn through it.
+ */
+function recomputeDynamicLocus<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: LocusEntity,
+  construction: { sliderId: string; tracerId: string; samples: number },
+): void {
+  const scene = draft.scene;
+  const slider = scene.sliders?.[construction.sliderId];
+  const tracer = scene.points[construction.tracerId];
+  if (!slider || !isGeometryPoint2D(tracer)) return;
+
+  const samples = Math.max(2, Math.min(MAX_LOCUS_SAMPLES, Math.floor(construction.samples)));
+  const span = slider.max - slider.min;
+  if (!Number.isFinite(span)) return;
+
+  // Loci are taken out of the scene the sweep runs over. Without that a locus
+  // would be recomputed by its own sampling - it depends on the slider, so it
+  // is one of the slider's dependents - and recur until the stack gave out.
+  // Taking them out also stops one locus paying for every other one, which
+  // would be quadratic in the number of curves on the figure.
+  const entities: Record<string, GeometryEntity> = {};
+  for (const [id, other] of Object.entries(scene.entities)) {
+    if (other.kind === 'locus' && other.construction?.kind === 'dynamicLocus') continue;
+    entities[id] = other;
+  }
+  const base = { ...scene, entities };
+
+  // The chain is worked out once and reused for every sample. Rebuilding the
+  // dependency graph per sample - which handing a fresh scene to
+  // `recomputeGeometryDependents` would do - is the cost this scoping exists to
+  // avoid, sixty-four times over.
+  const chain = geometryDependentsOf(base, [slider.id]);
+
+  const points: Vector2[] = [];
+  for (let step = 0; step < samples; step += 1) {
+    const value = slider.min + (span * step) / (samples - 1);
+    const swept = recomputeGeometryObjects(
+      { ...base, sliders: { ...scene.sliders, [slider.id]: { ...slider, value } } },
+      chain,
+    );
+    const at = swept.points[construction.tracerId];
+    if (!isGeometryPoint2D(at) || !Number.isFinite(at.x) || !Number.isFinite(at.y)) continue;
+    points.push({ x: at.x, y: at.y });
+  }
+
+  if (points.length === entity.points.length
+    && points.every((point, index) => nearlyEqual(point.x, (entity.points[index] as Vector2).x)
+      && nearlyEqual(point.y, (entity.points[index] as Vector2).y))) {
+    return;
+  }
+  setGeometryDraftEntity(draft, { ...entity, points });
+}
+
+/**
+ * Where a point sits along an object.
+ *
+ * <p>`at` runs from 0 to 1 over the object as drawn, so one number describes a
+ * position on any of them - and what falls outside that range is decided by
+ * what the object *is* rather than by a blanket rule. A circle wraps, because
+ * three-quarters of the way round twice is three-quarters of the way round. A
+ * segment or a polygon clamps, because it has ends. A line or a ray is
+ * unbounded, so the parameter runs past its two defining points and the point
+ * keeps going, which is the only reading that lets a slider sweep one.
+ */
+export function geometryPointOnPath2D(
+  scene: GeometryScene,
+  construction: { entityId: string; at: number; sliderId?: string },
+): Vector2 | null {
+  const entity = scene.entities[construction.entityId];
+  if (!entity) return null;
+
+  // A slider's value *is* the parameter rather than being rescaled into one:
+  // an author who wants a full sweep gives it the range 0 to 1, and one who
+  // wants half a circle says so. Rescaling would make the same slider mean
+  // different things on different paths.
+  const slider = construction.sliderId === undefined
+    ? undefined
+    : scene.sliders?.[construction.sliderId];
+  const raw = slider ? slider.value : construction.at;
+  if (!Number.isFinite(raw)) return null;
+
+  if (entity.kind === 'circle') {
+    const centre = scene.points[entity.centerId];
+    if (!isGeometryPoint2D(centre) || !(entity.radius > 0)) return null;
+    const angle = (raw - Math.floor(raw)) * Math.PI * 2;
+    return { x: centre.x + Math.cos(angle) * entity.radius, y: centre.y + Math.sin(angle) * entity.radius };
+  }
+
+  if (entity.kind === 'polygon') {
+    const corners = entity.pointIds.map((id) => scene.points[id]).filter(isGeometryPoint2D);
+    if (corners.length !== entity.pointIds.length || corners.length < 3) return null;
+    return alongPolyline(corners, clamp01(raw), true);
+  }
+
+  if (entity.kind === 'segment' || entity.kind === 'vector' || entity.kind === 'line' || entity.kind === 'ray') {
+    const from = scene.points[entity.pointIds[0]];
+    const to = scene.points[entity.pointIds[1]];
+    if (!isGeometryPoint2D(from) || !isGeometryPoint2D(to)) return null;
+    const bounded = entity.kind === 'segment' || entity.kind === 'vector';
+    const t = bounded ? clamp01(raw) : (entity.kind === 'ray' ? Math.max(0, raw) : raw);
+    return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+  }
+
+  return null;
+}
+
+/** A position a fraction of the way along a run of points, by arc length. */
+function alongPolyline(points: readonly Vector2[], at: number, closed: boolean): Vector2 | null {
+  const count = closed ? points.length : points.length - 1;
+  const lengths: number[] = [];
+  let total = 0;
+  for (let index = 0; index < count; index += 1) {
+    const from = points[index] as Vector2;
+    const to = points[(index + 1) % points.length] as Vector2;
+    const length = Math.hypot(to.x - from.x, to.y - from.y);
+    lengths.push(length);
+    total += length;
+  }
+  if (total < 1e-12) return { x: (points[0] as Vector2).x, y: (points[0] as Vector2).y };
+
+  let travelled = at * total;
+  for (let index = 0; index < count; index += 1) {
+    const length = lengths[index] as number;
+    if (travelled <= length || index === count - 1) {
+      const from = points[index] as Vector2;
+      const to = points[(index + 1) % points.length] as Vector2;
+      const t = length < 1e-12 ? 0 : Math.min(1, travelled / length);
+      return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+    }
+    travelled -= length;
+  }
+  return null;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
 /** Recomputes every supported derived object in dependency order. */
 export function recomputeGeometryScene<T extends GeometryScene>(scene: T): T {
   return recomputeGeometryObjects(scene, [...Object.keys(scene.points), ...Object.keys(scene.entities)]);
@@ -1790,6 +2007,13 @@ function recomputeGeometryPoint<T extends GeometryScene>(
     return;
   }
 
+  if (point.construction.kind === 'pointOnPath') {
+    const nextPosition = geometryPointOnPath2D(scene, point.construction);
+    if (!nextPosition) return;
+    updateGeometryPointPosition(draft, point, nextPosition);
+    return;
+  }
+
   if (point.construction.kind === 'circumcenter') {
     const circle = geometryCircumcircle2D(scene, point.construction.pointIds);
     if (circle) updateGeometryPointPosition(draft, point, circle.center);
@@ -1820,6 +2044,11 @@ function recomputeGeometryEntity<T extends GeometryScene>(
   entity: GeometryEntity,
 ): void {
   const scene = draft.scene;
+
+  if (entity.kind === 'locus' && entity.construction?.kind === 'dynamicLocus') {
+    recomputeDynamicLocus(draft, entity, entity.construction);
+    return;
+  }
 
   if (entity.kind === 'line') {
     if (entity.construction?.kind === 'angleBisector') {
@@ -2402,6 +2631,10 @@ function geometryConstructionKindLabel(kind: GeometryConstruction['kind']): stri
       return 'Circle through points';
     case 'parallelLine':
       return 'Parallel line';
+    case 'pointOnPath':
+      return 'Point on path';
+    case 'dynamicLocus':
+      return 'Locus';
     case 'perpendicularLine':
       return 'Perpendicular line';
     case 'tangentLine':

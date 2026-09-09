@@ -420,6 +420,36 @@ function applyGeometryLabDeltaUnchecked(
         snapshot,
         delta.ids.map(id => ({ collection: 'workPlane', id })),
       );
+    case 'addSlider2D':
+      assertGeometryLabIdAvailable(snapshot, delta.slider.id, delta.op);
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: {
+            ...snapshot.scene.scene2d,
+            sliders: { ...(snapshot.scene.scene2d.sliders ?? {}), [delta.slider.id]: delta.slider },
+          },
+        },
+      };
+    case 'updateSlider2D': {
+      const existing = snapshot.scene.scene2d.sliders?.[delta.id];
+      if (!existing) return snapshot;
+      // Clamped rather than refused: a control dragged to its end should stop
+      // there, and a value outside the range is what the schema rejects.
+      const next = { ...existing, ...delta.changes, id: existing.id };
+      next.value = Math.min(next.max, Math.max(next.min, next.value));
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: {
+            ...snapshot.scene.scene2d,
+            sliders: { ...(snapshot.scene.scene2d.sliders ?? {}), [delta.id]: next },
+          },
+        },
+      };
+    }
     case 'addConstraint2D':
       assertGeometryLabIdAvailable(snapshot, delta.constraint.id, delta.op);
       return {
@@ -717,6 +747,7 @@ function deleteGeometryLabIds(
   const scene2dPoints = { ...snapshot.scene.scene2d.points };
   const scene2dEntities = { ...snapshot.scene.scene2d.entities };
   const scene2dConstraints = { ...(snapshot.scene.scene2d.constraints ?? {}) };
+  const scene2dSliders = { ...(snapshot.scene.scene2d.sliders ?? {}) };
   const scene2dMeasurements = { ...(snapshot.scene.scene2d.measurements ?? {}) };
   const scene3dPoints = { ...snapshot.scene.scene3d.points };
   const scene3dEntities = { ...snapshot.scene.scene3d.entities };
@@ -729,6 +760,7 @@ function deleteGeometryLabIds(
       case 'point2d': delete scene2dPoints[ref.id]; break;
       case 'entity2d': delete scene2dEntities[ref.id]; break;
       case 'constraint2d': delete scene2dConstraints[ref.id]; break;
+      case 'slider2d': delete scene2dSliders[ref.id]; break;
       case 'measurement2d': delete scene2dMeasurements[ref.id]; break;
       case 'point3d': delete scene3dPoints[ref.id]; break;
       case 'entity3d': delete scene3dEntities[ref.id]; break;
@@ -769,6 +801,7 @@ function deleteGeometryLabIds(
         // keep their exact shape, and introducing an empty one here would
         // change the serialized form of every 2D scene that has none.
         ...(snapshot.scene.scene2d.measurements ? { measurements: scene2dMeasurements } : {}),
+        ...(snapshot.scene.scene2d.sliders ? { sliders: scene2dSliders } : {}),
       },
       scene3d: {
         ...snapshot.scene.scene3d,

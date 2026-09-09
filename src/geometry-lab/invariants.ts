@@ -25,6 +25,7 @@ export function getGeometryLabInvariantIssues(snapshot: GeometryLabSnapshot): Va
   registerRecord('scene.scene2d.points', scene2d.points, seenIds, issues);
   registerRecord('scene.scene2d.entities', scene2d.entities, seenIds, issues);
   registerRecord('scene.scene2d.constraints', scene2d.constraints ?? {}, seenIds, issues);
+  registerRecord('scene.scene2d.sliders', scene2d.sliders ?? {}, seenIds, issues);
   registerRecord('scene.scene2d.measurements', scene2d.measurements ?? {}, seenIds, issues);
   registerRecord('scene.scene3d.points', scene3d.points, seenIds, issues);
   registerRecord('scene.scene3d.entities', scene3d.entities, seenIds, issues);
@@ -41,6 +42,7 @@ export function getGeometryLabInvariantIssues(snapshot: GeometryLabSnapshot): Va
   const measurementIds = new Set(Object.keys(scene3d.measurements));
   const netIds = new Set(Object.keys(scene3d.nets));
   const constraintIds = new Set(Object.keys(scene2d.constraints ?? {}));
+  const sliderIds = new Set(Object.keys(scene2d.sliders ?? {}));
   const topLevelIds = unionSets(
     point2dIds,
     entity2dIds,
@@ -50,6 +52,7 @@ export function getGeometryLabInvariantIssues(snapshot: GeometryLabSnapshot): Va
     measurementIds,
     netIds,
     constraintIds,
+    sliderIds,
   );
 
   for (const [id, point] of Object.entries(scene2d.points)) {

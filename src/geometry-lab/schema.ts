@@ -87,6 +87,8 @@ const GEOMETRY_CONSTRUCTION_KINDS: Record<GeometryConstruction['kind'], true> = 
   circleThroughPoints: true,
   parallelLine: true,
   perpendicularLine: true,
+  dynamicLocus: true,
+  pointOnPath: true,
   tangentLine: true,
   angleBisector: true,
   angleFromLines: true,
@@ -124,6 +126,8 @@ const DELTA_OPS: Record<GeometryLabDelta['op'], true> = {
   updateWorkPlane: true,
   deleteWorkPlane: true,
   addConstraint2D: true,
+  addSlider2D: true,
+  updateSlider2D: true,
   deleteConstraint2D: true,
   addMeasurement2D: true,
   deleteMeasurement2D: true,
@@ -163,6 +167,7 @@ const COMMAND_TYPES: Record<GeometryLabCommand['type'], true> = {
 };
 
 const RECORD_HISTORY_COLLECTIONS = new Set([
+  'slider2d',
   'point2d',
   'entity2d',
   'constraint2d',
@@ -244,6 +249,7 @@ function validateSnapshotRecordIds(snapshot: UnknownRecord, context: ValidationC
     ['scene.scene2d.points', scene2d?.points],
     ['scene.scene2d.entities', scene2d?.entities],
     ['scene.scene2d.constraints', scene2d?.constraints],
+    ['scene.scene2d.sliders', scene2d?.sliders],
     ['scene.scene3d.points', scene3d?.points],
     ['scene.scene3d.entities', scene3d?.entities],
     ['scene.scene3d.workPlanes', scene3d?.workPlanes],
@@ -283,12 +289,13 @@ function validateScene(value: unknown, path: string, context: ValidationContext)
 }
 
 function validateScene2D(value: unknown, path: string, context: ValidationContext): void {
-  const record = exactRecord(value, path, context, ['kind', 'points', 'entities', 'constraints', 'measurements']);
+  const record = exactRecord(value, path, context, ['kind', 'points', 'entities', 'constraints', 'measurements', 'sliders']);
   if (!record) return;
   required(record, 'kind', path, context, (item, itemPath, itemContext) => literal(item, itemPath, itemContext, 'geometry-lab-2d'));
   required(record, 'points', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validatePoint2D));
   required(record, 'entities', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateGeometryEntity));
   optional(record, 'constraints', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateGeometryConstraint));
+  optional(record, 'sliders', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateGeometrySlider));
   optional(record, 'measurements', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateMeasurement2D));
 }
 
@@ -417,6 +424,16 @@ function validateConstruction(value: unknown, path: string, context: ValidationC
   } else if (kind === 'circumcenter' || kind === 'circleThroughPoints' || kind === 'angleBisector') {
     rejectUnknown(record, path, context, ['kind', 'pointIds']);
     required(record, 'pointIds', path, context, idTupleValidator(3));
+  } else if (kind === 'dynamicLocus') {
+    rejectUnknown(record, path, context, ['kind', 'sliderId', 'tracerId', 'samples']);
+    required(record, 'sliderId', path, context, nonEmptyString);
+    required(record, 'tracerId', path, context, nonEmptyString);
+    required(record, 'samples', path, context, nonNegativeInteger);
+  } else if (kind === 'pointOnPath') {
+    rejectUnknown(record, path, context, ['kind', 'entityId', 'at', 'sliderId']);
+    required(record, 'entityId', path, context, nonEmptyString);
+    required(record, 'at', path, context, finiteNumber);
+    optional(record, 'sliderId', path, context, nonEmptyString);
   } else if (kind === 'parallelLine' || kind === 'perpendicularLine') {
     rejectUnknown(record, path, context, ['kind', 'sourceLineId', 'throughPointId']);
     required(record, 'sourceLineId', path, context, nonEmptyString);
@@ -445,6 +462,37 @@ function validateConstruction(value: unknown, path: string, context: ValidationC
     rejectUnknown(record, path, context, ['kind', 'sourceIds', 'label']);
     required(record, 'sourceIds', path, context, idArrayValidator());
     optional(record, 'label', path, context, stringValue);
+  }
+}
+
+/**
+ * A slider is a number with a range, so the range has to make sense: a maximum
+ * below its minimum describes no sweep at all, and a value outside them is a
+ * figure showing a configuration its own control cannot reach.
+ */
+function validateGeometrySlider(value: unknown, path: string, context: ValidationContext): void {
+  const record = exactRecord(value, path, context, ['id', 'name', 'value', 'min', 'max', 'step', 'label', 'color', 'hidden']);
+  if (!record) return;
+  required(record, 'id', path, context, nonEmptyString);
+  required(record, 'name', path, context, nonEmptyString);
+  required(record, 'value', path, context, finiteNumber);
+  required(record, 'min', path, context, finiteNumber);
+  required(record, 'max', path, context, finiteNumber);
+  required(record, 'step', path, context, finiteNumber);
+  optional(record, 'label', path, context, nonEmptyString);
+  optional(record, 'color', path, context, nonEmptyString);
+  optional(record, 'hidden', path, context, booleanValue);
+  const min = record.min;
+  const max = record.max;
+  const current = record.value;
+  if (typeof min !== 'number' || typeof max !== 'number' || typeof current !== 'number') return;
+  if (max < min) {
+    context.issues.push({ path: `${path}.max`, message: 'A slider maximum cannot be below its minimum.' });
+  } else if (current < min || current > max) {
+    context.issues.push({ path: `${path}.value`, message: 'A slider value has to be inside its own range.' });
+  }
+  if (typeof record.step === 'number' && record.step < 0) {
+    context.issues.push({ path: `${path}.step`, message: 'A slider step cannot be negative.' });
   }
 }
 
@@ -983,6 +1031,23 @@ function validateDeltaValue(value: unknown, path: string, context: ValidationCon
   else if (op === 'deleteWorkPlane' || op === 'deleteMeasurement' || op === 'deleteMeasurement2D' || op === 'deleteConstraint2D' || op === 'deleteNet' || op === 'delete') validateIdsOp(record, path, context);
   else if (op === 'addMeasurement2D') validateOpPayload(record, path, context, 'measurement', validateMeasurement2D);
   else if (op === 'addConstraint2D') validateOpPayload(record, path, context, 'constraint', validateGeometryConstraint);
+  else if (op === 'addSlider2D') validateOpPayload(record, path, context, 'slider', validateGeometrySlider);
+  else if (op === 'updateSlider2D') {
+    rejectUnknown(record, path, context, ['op', 'id', 'changes']);
+    required(record, 'id', path, context, nonEmptyString);
+    required(record, 'changes', path, context, (item, itemPath, itemContext) => {
+      const changes = exactRecord(item, itemPath, itemContext, ['name', 'value', 'min', 'max', 'step', 'label', 'color', 'hidden']);
+      if (!changes) return;
+      optional(changes, 'name', itemPath, itemContext, nonEmptyString);
+      optional(changes, 'value', itemPath, itemContext, finiteNumber);
+      optional(changes, 'min', itemPath, itemContext, finiteNumber);
+      optional(changes, 'max', itemPath, itemContext, finiteNumber);
+      optional(changes, 'step', itemPath, itemContext, finiteNumber);
+      optional(changes, 'label', itemPath, itemContext, nonEmptyString);
+      optional(changes, 'color', itemPath, itemContext, nonEmptyString);
+      optional(changes, 'hidden', itemPath, itemContext, booleanValue);
+    });
+  }
   else if (op === 'addMeasurement') validateOpPayload(record, path, context, 'measurement', validateMeasurement);
   else if (op === 'updateMeasurement') validateIdAndChanges(record, path, context, validateMeasurementChanges);
   else if (op === 'addNet') validateOpPayload(record, path, context, 'net', validateNet);

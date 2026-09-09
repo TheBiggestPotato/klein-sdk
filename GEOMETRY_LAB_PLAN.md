@@ -18,7 +18,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 7 | 7 | Complete |
 | 5 - Accessibility and output | 5 | 5 | Complete |
-| 6 - Mathematical depth | 0 | 5 | |
+| 6 - Mathematical depth | 1 | 5 | 6.1 landed |
 
 Run `npm run bench:geometry-lab` for the current numbers, or
 `npm run bench:geometry-lab:check` to compare against the committed baseline.
@@ -1393,12 +1393,65 @@ students who currently get nothing.
 
 ## Phase 6 - mathematical depth
 
-- [ ] **6.1 Sliders, trace, dynamic locus.** `slider` appears exactly once in
-  the entire codebase - as an enum member at `src/geometry/index.ts:184`.
-  `addLocus` takes a static `Vector2[]`, not a driver point. These gate most of
-  conics, envelopes and optimisation. **Memory:** a trace is unbounded by
-  nature; use a fixed-capacity ring buffer (2,048 points) over a packed typed
-  array, never an append-forever list.
+- [x] **6.1 Sliders, trace, dynamic locus.** All three landed: `addSlider2D`,
+  `addPointOnPath2D`, `addDynamicLocus2D`, and `startTrace2D`.
+
+  **A point at a parameter rather than at a position** is the idea the rest
+  hangs on. `pointOnPath` puts a point a fraction of the way along an object,
+  and what happens outside nought-to-one is decided by what the object *is*
+  rather than by a blanket rule: a circle wraps, because three-quarters of the
+  way round twice is three-quarters of the way round; a segment or polygon
+  clamps, because it has ends; a line runs on, which is the only reading that
+  lets a slider sweep one. A slider's value **is** the parameter rather than
+  being rescaled into one, so the same slider means the same thing on every
+  path it drives.
+
+  **A locus is a construction, not a list of coordinates.** `addLocus` took a
+  `Vector2[]` somebody had computed elsewhere, which made it a picture of a
+  locus: the points stayed where they were put when the figure moved.
+  `dynamicLocus` sweeps the driver and records the tracer, so widening the
+  circle that generates a curve widens the curve. Every test moves something
+  afterwards, because a locus that only held together where it was built would
+  pass none of them.
+
+  **The sweep is scoped, and this is the case task 0.3 was actually right for.**
+  Scoped recomputation was measured as *slower* than a full pass for an ordinary
+  edit and rejected on that evidence. A locus is the opposite shape - a whole
+  scene recomputed sixty-four times against a handful of objects recomputed
+  sixty-four times - and the chain is worked out once and reused for every
+  sample, so the dependency graph is built once rather than per sample.
+  Measured on a 400-object scene: a drag costs 2.40 ms without a locus and
+  3.96 ms with a 64-sample one, so the curve costs **1.56 ms**; one whole-scene
+  recompute is 0.167 ms, so the unscoped version would have cost **10.7 ms**
+  per drag. Gated as `drag-with-locus`.
+
+  Two things the first version got wrong and the tests caught. A locus depends
+  on its slider, so it is one of the slider's dependents - and sampling
+  recomputed *itself*, until the stack gave out. Loci are now taken out of the
+  scene the sweep runs over, which also stops one curve paying for every other
+  one. And a sample count is capped at 256, because smoothness is a request a
+  figure can make and an edit budget is not.
+
+  **The trace is a ring over a packed `Float64Array`**, exactly as the task
+  asked: 2,048 positions, thirty-two kilobytes, allocated once, and the
+  two-thousand-and-forty-ninth overwrites the first. What fell off is counted
+  rather than silently forgotten, so a curve that has lost its beginning can
+  say so, and a position identical to the last is not recorded - a drag commits
+  per frame and a figure often has not moved, and a trace full of one position
+  repeated has thrown away its history to store a still life.
+
+  **It is not in the snapshot, deliberately.** A trace is a record of what this
+  session did, not a property of the figure. In the document it would go through
+  undo, the history diff, every collaborative message and JSON - and a typed
+  array is not JSON, so storing it there would give up the only reason it is a
+  typed array.
+
+  Adding a scene collection turned out to touch eight places - the schema, the
+  reducer, the dependency graph, the integrity check, the history diff and its
+  ref type, the structural clone, and the delete plan - and the failure mode
+  when one is missed is quiet: the history diff reported no change, so the
+  commit reported nothing had happened and the slider vanished. Worth recording
+  as the shape of that work rather than as a surprise.
 - [ ] **6.2 Exact arithmetic for measurements.** `src/math` parses, formats and
   evaluates; there is no simplification, no symbolic differentiation, no
   solving. Every measurement is a float, so the tool can say `4.4721` but never

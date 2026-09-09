@@ -22,6 +22,7 @@ const GEOMETRY_LAB_HISTORY_RECORD_COLLECTIONS = [
   'point2d',
   'entity2d',
   'constraint2d',
+  'slider2d',
   'measurement2d',
   'point3d',
   'entity3d',
@@ -280,6 +281,7 @@ function geometryLabHistoryRecord(
     case 'entity2d': return snapshot.scene.scene2d.entities;
     case 'measurement2d': return snapshot.scene.scene2d.measurements ?? {};
     case 'constraint2d': return snapshot.scene.scene2d.constraints ?? {};
+    case 'slider2d': return snapshot.scene.scene2d.sliders ?? {};
     case 'point3d': return snapshot.scene.scene3d.points;
     case 'entity3d': return snapshot.scene.scene3d.entities;
     case 'workPlane': return snapshot.scene.scene3d.workPlanes;

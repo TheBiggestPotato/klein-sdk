@@ -290,6 +290,27 @@ export function build3DInvariantScene(planeCount, pointCount) {
   return lab;
 }
 
+/** A figure whose locus is driven by a slider, beside unrelated objects. */
+export function buildLocusScene(unrelated, samples) {
+  const lab = createGeometryLab({ initialView: '2d' });
+  const centre = lab.addPoint2D({ x: 0, y: 0 });
+  const rim = lab.addPoint2D({ x: 6, y: 0 });
+  const circle = lab.addCircle2D(centre, rim);
+  const slider = lab.addSlider2D({ name: 't' });
+  const sweeping = lab.addPointOnPath2D(circle, { sliderId: slider });
+  const dragId = lab.addPoint2D({ x: 10, y: 0 });
+  const tracer = lab.addMidpoint2D(dragId, sweeping);
+  const ids = [];
+  for (let index = 0; index < unrelated; index += 1) {
+    ids.push(lab.addPoint2D({ x: index, y: index % 7 }));
+  }
+  for (let index = 0; index + 1 < unrelated; index += 1) {
+    lab.addSegment2D(ids[index], ids[index + 1]);
+  }
+  lab.addDynamicLocus2D(slider, tracer, { samples });
+  return { lab, dragId };
+}
+
 export function buildInvariantScene(pointCount) {
   const lab = createGeometryLab();
   const deltas = [];
@@ -567,6 +588,23 @@ export const CASES = [
       const { lab } = build3DScene(500);
       const snapshot = lab.getSnapshot();
       return () => renderGeometryLabSvg3D(snapshot, { format: 'svg', describeObjects: false }, {});
+    },
+  },
+  {
+    id: 'drag-with-locus',
+    // A locus is dozens of recomputations inside one edit, which is why it is
+    // scoped to the tracer's own chain. This is what that costs on a scene big
+    // enough for the difference to matter.
+    title: 'Drag on a 400-object scene carrying a 64-sample locus',
+    findings: [],
+    budgetMs: 8,
+    run() {
+      const { lab, dragId } = buildLocusScene(400, 64);
+      let step = 0;
+      return () => {
+        step += 1;
+        lab.applyDelta({ op: 'updatePoint', id: dragId, changes: { x: 10 + step * 0.01 } });
+      };
     },
   },
   {

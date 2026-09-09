@@ -6,6 +6,7 @@ import {
   applyGeometryTransform2D,
   constrainGeometryScene,
   geometryIntersectionPoint2D,
+  geometryPointOnPath2D,
   lineEquationFrom2DPoints,
   normalizeGeometryPlaneEquation3D,
   planeEquationFrom3DPoints,
@@ -138,6 +139,14 @@ function assertRecomputableScene2D(snapshot: GeometryLabSnapshot): void {
       if (scene.points[firstId]?.kind !== 'point2d' || scene.points[secondId]?.kind !== 'point2d') {
         fail('unrecomputable_2d', point.id, `Midpoint "${point.id}" has a missing 2D source point.`);
       }
+    } else if (construction.kind === 'pointOnPath') {
+      if (!geometryPointOnPath2D(scene, construction)) {
+        fail(
+          'unrecomputable_2d',
+          point.id,
+          `Point "${point.id}" sits on an object with no path along it - the object is missing, or has collapsed to nothing.`,
+        );
+      }
     } else if (construction.kind === 'transformedPoint') {
       const source = scene.points[construction.sourceId];
       if (source?.kind !== 'point2d') {
@@ -188,6 +197,16 @@ function assertRecomputableScene2D(snapshot: GeometryLabSnapshot): void {
       const through = scene.points[construction.throughPointId];
       if (entity.kind !== 'line' || !source || !through || !lineLikeEquation2D(scene, source.id)) {
         fail('unrecomputable_2d', entity.id, `Constructed line "${entity.id}" has an invalid source line or point.`);
+      }
+    } else if (entity.kind === 'locus' && construction.kind === 'dynamicLocus') {
+      const slider = scene.sliders?.[construction.sliderId];
+      const tracer = scene.points[construction.tracerId];
+      if (!slider || tracer?.kind !== 'point2d') {
+        fail(
+          'unrecomputable_2d',
+          entity.id,
+          `Locus "${entity.id}" has lost the slider that drives it or the point it traces.`,
+        );
       }
     } else if (entity.kind === 'circle' && construction.kind === 'circleCenterPoint') {
       const center = scene.points[construction.centerPointId];
@@ -1787,6 +1806,7 @@ function cloneSnapshot(snapshot: GeometryLabSnapshot, reuseSurfaceMeshCaches: bo
         points: { ...scene2d.points },
         entities: { ...scene2d.entities },
         ...(scene2d.constraints ? { constraints: { ...scene2d.constraints } } : {}),
+        ...(scene2d.sliders ? { sliders: { ...scene2d.sliders } } : {}),
       },
       scene3d: {
         ...scene3d,

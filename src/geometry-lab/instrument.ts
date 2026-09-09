@@ -1,8 +1,10 @@
 /** Framework-independent Geometry Lab instrument and factory implementation. */
 import { createInstrumentRuntime, KleinSdkError } from '../core/index.js';
 import { svgToPngBlob } from '../export/index.js';
+import { DEFAULT_TRACE_CAPACITY, GeometryTrace } from './trace.js';
 import { attachGeometryLabPointer } from './interaction.js';
 import type { GeometryPointerAttachment, GeometryPointerOptions } from './interaction.js';
+import type { GeometrySliderDraft2D } from './types.js';
 import type {
   ApplyDeltaOptions,
   Camera3DState,
@@ -18,6 +20,8 @@ import type {
   Vector3,
 } from '../core/index.js';
 import {
+  MAX_LOCUS_SAMPLES,
+  geometryPointOnPath2D,
   buildAngleBisector2D,
   buildTransformedObject2D,
   geometryTransform2DSourceIds,
@@ -34,6 +38,8 @@ import {
 import type {
   AngleEntity,
   GeometryConstraint,
+  GeometrySlider,
+  LocusEntity,
   GeometryConstruction,
   GeometryConstructionResult,
   GeometryEntity,
@@ -212,6 +218,7 @@ export {
   validateGeometryLabSnapshot,
 } from './validation.js';
 export { validateGeometryLabCommand } from './commands.js';
+export { DEFAULT_TRACE_CAPACITY, GeometryTrace } from './trace.js';
 export { attachGeometryLabPointer } from './interaction.js';
 export type { GeometryPointerAttachment, GeometryPointerOptions } from './interaction.js';
 export { DEFAULT_PICK_RADIUS, GeometryHitIndex } from './hit-test.js';
@@ -492,6 +499,7 @@ class GeometryLabInstrument implements GeometryLab {
   #deltaListeners = new Set<(delta: GeometryLabDelta, meta: DeltaMeta) => void>();
   #root: HTMLElement | undefined;
   #pointer: GeometryPointerAttachment | undefined;
+  readonly #traces = new Map<string, GeometryTrace>();
   readonly #interactive: boolean | GeometryPointerOptions;
   #undoStack: GeometryLabHistoryEntry[] = [];
   #redoStack: GeometryLabHistoryEntry[] = [];
@@ -698,6 +706,56 @@ class GeometryLabInstrument implements GeometryLab {
   }
 
   /**
+   * Starts keeping a record of where a point goes.
+   *
+   * <p>Kept on the instrument rather than in the document: a trace is what this
+   * session did, not a property of the figure, and putting it in the snapshot
+   * would send it through undo, the history diff and every collaborative
+   * message for something nobody opening the file later would want.
+   */
+  startTrace2D(pointId: string, capacity: number = DEFAULT_TRACE_CAPACITY): void {
+    this.#require2DPoint(pointId);
+    const point = this.#snapshot.scene.scene2d.points[pointId] as GeometryPoint2D;
+    const trace = new GeometryTrace(capacity);
+    trace.record({ x: point.x, y: point.y });
+    this.#traces.set(pointId, trace);
+  }
+
+  /** Stops recording, and forgets what was recorded. */
+  stopTrace2D(pointId: string): void {
+    this.#traces.delete(pointId);
+  }
+
+  /** Where the point has been, oldest first, or nothing if it is not traced. */
+  getTrace2D(pointId: string): GeometryTrace | undefined {
+    return this.#traces.get(pointId);
+  }
+
+  /** Every point being traced. */
+  tracedPointIds(): string[] {
+    return [...this.#traces.keys()].sort();
+  }
+
+  /**
+   * Adds each traced point's new position, once per commit.
+   *
+   * <p>Per commit rather than per frame, because a commit is what a change is:
+   * a drag that moves nothing records nothing, and the ring drops a repeat of
+   * the position it already holds.
+   */
+  #recordTraces(): void {
+    if (this.#traces.size === 0) return;
+    const points = this.#snapshot.scene.scene2d.points;
+    for (const [id, trace] of this.#traces) {
+      const point = points[id];
+      // A traced point that has been deleted stops being traced, rather than
+      // keeping a buffer nothing will ever write to again.
+      if (!point || point.kind !== 'point2d') { this.#traces.delete(id); continue; }
+      trace.record({ x: point.x, y: point.y });
+    }
+  }
+
+  /**
    * The figure in words: what it holds, how it was built, what it establishes
    * and what has been measured. The same text `export({ format: 'text' })`
    * produces.
@@ -747,6 +805,9 @@ class GeometryLabInstrument implements GeometryLab {
       throw sdkError;
     }
     this.#snapshot = next;
+    // A different document is a different figure, so what the last one's points
+    // did is not this one's history.
+    for (const trace of this.#traces.values()) trace.clear();
     this.#undoStack = [];
     this.#redoStack = [];
     this.#historyBytes = 0;
@@ -1446,6 +1507,110 @@ class GeometryLabInstrument implements GeometryLab {
     return this.transform2D(targetId, { kind: 'dilate', centerPointId, factor }, style);
   }
 
+  /**
+   * Adds a named number the figure can be built on.
+   *
+   * <p>The default range is nought to one, which is what a point placed along a
+   * path wants: a slider's value *is* the parameter rather than being rescaled
+   * into one, so the common case is the one that needs no arithmetic.
+   */
+  addSlider2D(slider: GeometrySliderDraft2D): string {
+    this.#assertWritable();
+    this.#assertInputString('Slider name', slider.name);
+    const min = slider.min ?? 0;
+    const max = slider.max ?? 1;
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max < min) {
+      throw new KleinSdkError('invalid_slider', 'A slider needs a finite range with its maximum at or above its minimum.');
+    }
+    const created: GeometrySlider = {
+      id: this.#ids.next('slider'),
+      name: slider.name,
+      value: Math.min(max, Math.max(min, slider.value ?? min)),
+      min,
+      max,
+      step: slider.step !== undefined && slider.step >= 0 ? slider.step : 0,
+    };
+    if (slider.label !== undefined) created.label = slider.label;
+    if (slider.color !== undefined) created.color = slider.color;
+    if (slider.hidden !== undefined) created.hidden = slider.hidden;
+    this.#commitDelta({ op: 'addSlider2D', slider: created });
+    return created.id;
+  }
+
+  /** Moves a slider, and with it everything built on it. */
+  setSliderValue2D(id: string, value: number): void {
+    this.#assertWritable();
+    if (!this.#snapshot.scene.scene2d.sliders?.[id]) {
+      throw new KleinSdkError('missing_slider', `Slider "${id}" does not exist.`);
+    }
+    this.#commitDelta({ op: 'updateSlider2D', id, changes: { value: finiteNumber(value, 'Slider value') } });
+  }
+
+  /**
+   * A point placed along an object rather than at a position.
+   *
+   * <p>With a slider it is the thing that sweeps, and so the thing a locus is
+   * traced by; without one it is a point pinned a fixed fraction of the way
+   * along something, which follows that object as it moves.
+   */
+  addPointOnPath2D(
+    entityId: string,
+    at: number | { sliderId: string },
+    style: GeometryLabStyleOptions = {},
+  ): string {
+    this.#assertWritable();
+    this.#require2DEntity(entityId);
+    const sliderId = typeof at === 'object' ? at.sliderId : undefined;
+    if (sliderId !== undefined && !this.#snapshot.scene.scene2d.sliders?.[sliderId]) {
+      throw new KleinSdkError('missing_slider', `Slider "${sliderId}" does not exist.`);
+    }
+    const construction: GeometryConstruction = sliderId === undefined
+      ? { kind: 'pointOnPath', entityId, at: finiteNumber(at as number, 'Path parameter') }
+      : { kind: 'pointOnPath', entityId, at: 0, sliderId };
+    const position = geometryPointOnPath2D(this.#snapshot.scene.scene2d, construction);
+    if (!position) {
+      throw new KleinSdkError('invalid_point_on_path', 'That object has no path a point can sit along.');
+    }
+    const created = withPoint2DStyle({
+      id: this.#ids.next('p2'),
+      kind: 'point2d',
+      x: position.x,
+      y: position.y,
+      locked: true,
+      construction,
+    }, style);
+    this.#commitDelta({ op: 'addPoint2D', point: created });
+    return created.id;
+  }
+
+  /**
+   * The path a point traces as a slider sweeps its whole range.
+   *
+   * <p>A construction rather than a list of coordinates: the curve follows the
+   * figure that generates it, which is the entire reason a locus is worth
+   * drawing on a screen rather than on paper.
+   */
+  addDynamicLocus2D(
+    sliderId: string,
+    tracerId: string,
+    options: GeometryLabStyleOptions & { samples?: number } = {},
+  ): string {
+    this.#assertWritable();
+    if (!this.#snapshot.scene.scene2d.sliders?.[sliderId]) {
+      throw new KleinSdkError('missing_slider', `Slider "${sliderId}" does not exist.`);
+    }
+    this.#require2DPoint(tracerId);
+    const samples = Math.max(2, Math.min(MAX_LOCUS_SAMPLES, Math.floor(options.samples ?? 64)));
+    const created = withEntity2DStyle<LocusEntity>({
+      id: this.#ids.next('locus'),
+      kind: 'locus',
+      points: [],
+      construction: { kind: 'dynamicLocus', sliderId, tracerId, samples },
+    }, options);
+    this.#commitDelta({ op: 'addEntity2D', entity: created });
+    return created.id;
+  }
+
   addConstraint2D(constraint: GeometryConstraintDraft2D): string {
     this.#assertWritable();
     for (const id of geometryConstraintDependencies({ ...constraint, id: 'draft' } as GeometryConstraint)) {
@@ -2116,6 +2281,7 @@ class GeometryLabInstrument implements GeometryLab {
       throw sdkError;
     }
     this.#snapshot = next;
+    this.#recordTraces();
     if (recordHistory && historyEntry) {
       this.#recordHistoryEntry(historyEntry);
     } else if (options.invalidateHistory) {

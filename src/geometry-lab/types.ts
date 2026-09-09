@@ -11,6 +11,7 @@ import type {
 } from '../core/index.js';
 import type {
   GeometryConstraint,
+  GeometrySlider,
   GeometryEntity,
   GeometryTransform2D,
   GeometryPlaneEquation3D,
@@ -110,6 +111,18 @@ export interface GeometryLabStyleOptions {
 }
 
 /** A constraint without its id, which the instrument assigns. */
+/** A slider without the id the instrument assigns, and with sensible defaults. */
+export interface GeometrySliderDraft2D {
+  name: string;
+  value?: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  label?: string;
+  color?: string;
+  hidden?: boolean;
+}
+
 export type GeometryConstraintDraft2D =
   | { kind: 'fixedLength'; pointIds: [string, string]; length: number; label?: string; enabled?: boolean }
   | { kind: 'fixedAngle'; pointIds: [string, string, string]; degrees: number; label?: string; enabled?: boolean }
@@ -319,7 +332,7 @@ export type GeometryLabSnapshot = InstrumentSnapshot<GeometryLabScene, GeometryL
 
 /** Stable record locations used by collaboration-safe conditional history patches. */
 export type GeometryLabHistoryRef =
-  | { collection: 'point2d' | 'entity2d' | 'constraint2d' | 'measurement2d' | 'point3d' | 'entity3d' | 'workPlane' | 'measurement' | 'net' | 'link'; id: string }
+  | { collection: 'point2d' | 'entity2d' | 'constraint2d' | 'slider2d' | 'measurement2d' | 'point3d' | 'entity3d' | 'workPlane' | 'measurement' | 'net' | 'link'; id: string }
   | { collection: 'appState'; key: string }
   | { collection: 'metadata' };
 
@@ -353,6 +366,8 @@ export type GeometryLabDelta =
   | { op: 'updateWorkPlane'; id: string; changes: Partial<WorkPlane3D> }
   | { op: 'deleteWorkPlane'; ids: string[] }
   | { op: 'addConstraint2D'; constraint: GeometryConstraint }
+  | { op: 'addSlider2D'; slider: GeometrySlider }
+  | { op: 'updateSlider2D'; id: string; changes: Partial<Omit<GeometrySlider, 'id'>> }
   | { op: 'deleteConstraint2D'; ids: string[] }
   | { op: 'addMeasurement2D'; measurement: Measurement2D }
   | { op: 'deleteMeasurement2D'; ids: string[] }
@@ -447,6 +462,8 @@ export interface GeometryLab extends KleinInstrument<GeometryLabSnapshot, Geomet
   reflectInPoint2D(targetId: string, centerPointId: string, style?: GeometryLabStyleOptions): string;
   dilate2D(targetId: string, centerPointId: string, factor: number, style?: GeometryLabStyleOptions): string;
   addConstraint2D(constraint: GeometryConstraintDraft2D): string;
+  addSlider2D(slider: GeometrySliderDraft2D): string;
+  setSliderValue2D(id: string, value: number): void;
   removeConstraint2D(ids: string | string[]): void;
   addDistanceMeasurement2D(firstPointId: string, secondPointId: string, label?: string): string;
   addLengthMeasurement2D(entityId: string, label?: string): string;

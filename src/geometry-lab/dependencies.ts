@@ -18,6 +18,7 @@ export type GeometryLabStoredCollection =
   | 'point2d'
   | 'entity2d'
   | 'constraint2d'
+  | 'slider2d'
   | 'measurement2d'
   | 'point3d'
   | 'entity3d'
@@ -149,6 +150,7 @@ const STORED_COLLECTIONS: readonly GeometryLabStoredCollection[] = [
   'point2d',
   'entity2d',
   'constraint2d',
+  'slider2d',
   'measurement2d',
   'point3d',
   'entity3d',
@@ -162,6 +164,7 @@ const GENERIC_REFERENCE_COLLECTIONS: readonly GeometryLabStoredCollection[] = [
   'point2d',
   'entity2d',
   'constraint2d',
+  'slider2d',
   'measurement2d',
   'point3d',
   'entity3d',
@@ -246,6 +249,7 @@ function populateGeometryLabDependencyGraph(
   addRecordNodes(builder, 'point2d', scene2d.points, 'scene.scene2d.points');
   addRecordNodes(builder, 'entity2d', scene2d.entities, 'scene.scene2d.entities');
   addRecordNodes(builder, 'constraint2d', scene2d.constraints ?? {}, 'scene.scene2d.constraints');
+  addRecordNodes(builder, 'slider2d', scene2d.sliders ?? {}, 'scene.scene2d.sliders');
   addRecordNodes(builder, 'measurement2d', scene2d.measurements ?? {}, 'scene.scene2d.measurements');
   addRecordNodes(builder, 'point3d', scene3d.points, 'scene.scene3d.points');
   addRecordNodes(builder, 'entity3d', scene3d.entities, 'scene.scene3d.entities');
