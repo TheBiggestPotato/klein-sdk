@@ -713,7 +713,7 @@ function validateSurface(value: unknown, path: string, context: ValidationContex
   if (!record) return;
   required(record, 'id', path, context, nonEmptyString);
   required(record, 'kind', path, context, (item, itemPath, itemContext) => literal(item, itemPath, itemContext, 'surface3d'));
-  required(record, 'surfaceKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['z-function', 'parametric', 'equation']));
+  required(record, 'surfaceKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['z-function', 'parametric', 'equation', 'implicit']));
   optional(record, 'dependentAxis', path, context, validateAxis);
   required(record, 'vertices', path, context, vector3Array);
   required(record, 'faces', path, context, faceIndexArray);
@@ -1142,7 +1142,7 @@ function validateEntityChanges(value: unknown, path: string, context: Validation
   optional(record, 'faceIds', path, context, idArrayValidator());
   optional(record, 'targetIds', path, context, idArrayValidator());
   optional(record, 'dependentAxis', path, context, validateAxis);
-  optional(record, 'surfaceKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['z-function', 'parametric', 'equation']));
+  optional(record, 'surfaceKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['z-function', 'parametric', 'equation', 'implicit']));
   optional(record, 'solid', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['cube', 'cuboid', 'tetrahedron', 'prism', 'pyramid', 'cylinder', 'cone', 'sphere', 'hemisphere', 'polyhedron']));
   optional(record, 'conicKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['ellipse', 'parabola', 'hyperbola']));
   optional(record, 'orientation', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['interior', 'exterior']));

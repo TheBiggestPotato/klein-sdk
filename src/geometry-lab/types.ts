@@ -132,6 +132,16 @@ export interface GeometrySliderDraft2D {
   hidden?: boolean;
 }
 
+/** An implicit surface: the shape where an equation in x, y and z holds. */
+export interface ImplicitSurfaceInput3D {
+  /** `x^2 + y^2 + z^2 = 9`, or a bare expression read as "this is zero". */
+  input: string;
+  /** The box to look inside. A surface has no extent of its own to infer one from. */
+  domain?: { x?: [number, number]; y?: [number, number]; z?: [number, number] };
+  /** Cells along each axis; the equation is evaluated at `(resolution + 1)^3` corners. */
+  resolution?: number;
+}
+
 export type GeometryConstraintDraft2D =
   | { kind: 'fixedLength'; pointIds: [string, string]; length: number; label?: string; enabled?: boolean }
   | { kind: 'fixedAngle'; pointIds: [string, string, string]; degrees: number; label?: string; enabled?: boolean }
@@ -224,7 +234,7 @@ export interface CrossSectionEntity extends GeometryLabStyleOptions {
 export interface SurfaceEntity3D extends GeometryLabStyleOptions {
   id: string;
   kind: 'surface3d';
-  surfaceKind: 'z-function' | 'parametric' | 'equation';
+  surfaceKind: 'z-function' | 'parametric' | 'equation' | 'implicit';
   dependentAxis?: EquationAxis3D;
   vertices: Vector3[];
   faces: number[][];

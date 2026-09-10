@@ -2,9 +2,14 @@
 import { createInstrumentRuntime, KleinSdkError } from '../core/index.js';
 import { svgToPngBlob } from '../export/index.js';
 import { DEFAULT_TRACE_CAPACITY, GeometryTrace } from './trace.js';
+import {
+  compileImplicitSurface3D,
+  isosurfaceEvaluationCount,
+  marchIsosurface3D,
+} from './implicit-surfaces.js';
 import { attachGeometryLabPointer } from './interaction.js';
 import type { GeometryPointerAttachment, GeometryPointerOptions } from './interaction.js';
-import type { GeometrySliderDraft2D } from './types.js';
+import type { GeometrySliderDraft2D, ImplicitSurfaceInput3D } from './types.js';
 import type {
   ApplyDeltaOptions,
   Camera3DState,
@@ -219,6 +224,13 @@ export {
 } from './validation.js';
 export { validateGeometryLabCommand } from './commands.js';
 export { DEFAULT_TRACE_CAPACITY, GeometryTrace } from './trace.js';
+export {
+  compileImplicitSurface3D,
+  isosurfaceEvaluationCount,
+  isosurfaceResolutionWithin,
+  marchIsosurface3D,
+} from './implicit-surfaces.js';
+export type { Isosurface3D, IsosurfaceInput3D, ScalarField3D } from './implicit-surfaces.js';
 export { attachGeometryLabPointer } from './interaction.js';
 export type { GeometryPointerAttachment, GeometryPointerOptions } from './interaction.js';
 export { DEFAULT_PICK_RADIUS, GeometryHitIndex } from './hit-test.js';
@@ -1899,6 +1911,75 @@ class GeometryLabInstrument implements GeometryLab {
     return entity.id;
   }
 
+  /**
+   * A surface given as an equation the whole of space has to satisfy.
+   *
+   * <p>The explicit kind - `z = f(x, y)` - can only be a graph, so a sphere, a
+   * torus and anything else with two sheets or a hole in it were simply
+   * unavailable. This samples the equation over a box and walks out the shape
+   * where it holds.
+   *
+   * <p>A box is needed because a surface has no extent of its own to infer one
+   * from: `x² + y² - z² = 1` goes on for ever, and what a student sees is
+   * whatever part of it is looked at.
+   */
+  addImplicitSurface3D(input: ImplicitSurfaceInput3D, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    this.#assertInputString('Implicit surface equation', input.input);
+    const compiled = compileImplicitSurface3D(input.input);
+    const domain = {
+      x: implicitRange(input.domain?.x, 'x'),
+      y: implicitRange(input.domain?.y, 'y'),
+      z: implicitRange(input.domain?.z, 'z'),
+    };
+    const resolution = Math.max(2, Math.floor(input.resolution ?? DEFAULT_IMPLICIT_RESOLUTION));
+    // The budget is a count of evaluations, and a grid's is cubic in its
+    // resolution - so this is where a request for detail meets the limit, and
+    // the message says how many it asked for rather than only that it was too
+    // many.
+    this.#assertInputCount(
+      'Surface continuity probe evaluations',
+      isosurfaceEvaluationCount(resolution),
+      this.#complexityLimits.maxSamplerProbeEvaluations,
+    );
+
+    const surface = marchIsosurface3D({
+      field: compiled.field,
+      bounds: domain,
+      resolution,
+      maxEvaluations: this.#complexityLimits.maxSamplerProbeEvaluations,
+    });
+    if (!surface.faces.length) {
+      throw new KleinSdkError(
+        'invalid_surface',
+        'The equation is not satisfied anywhere inside that box, so there is nothing to draw. Try a larger domain.',
+      );
+    }
+    this.#assertInputCount(
+      'Surface vertices per entity',
+      surface.vertices.length,
+      this.#complexityLimits.maxSurfaceVerticesPerEntity,
+    );
+    this.#assertInputCount(
+      'Surface faces per entity',
+      surface.faces.length,
+      this.#complexityLimits.maxSurfaceFacesPerEntity,
+    );
+
+    const entity = withEntity3DStyle<SurfaceEntity3D>({
+      id: this.#ids.next('surf3'),
+      kind: 'surface3d',
+      surfaceKind: 'implicit',
+      vertices: surface.vertices,
+      faces: surface.faces,
+      input: compiled.input,
+      domain,
+      samples: { x: resolution, y: resolution, z: resolution },
+    }, style);
+    this.#commitDelta({ op: 'addEntity3D', entity });
+    return entity.id;
+  }
+
   addEquationSurface3D(input: EquationSurfaceInput3D, style: GeometryLabStyleOptions = {}): string {
     this.#assertWritable();
     this.#assertInputString('Equation input', input.input);
@@ -2658,6 +2739,25 @@ function intersectPlanes(first: PlaneData3D, second: PlaneData3D): GeometryLine3
  * there was a 2D renderer, SVG always meant the 3D scene, and it still does for
  * every snapshot that has nothing 2D in it.
  */
+/**
+ * Cells along an axis by default.
+ *
+ * <p>Thirty-two cells is 35,937 corners - inside the probe budget, and fine
+ * enough that a sphere reads as one rather than as a gem. The cost is cubic, so
+ * this is a number worth being deliberate about.
+ */
+const DEFAULT_IMPLICIT_RESOLUTION = 32;
+
+/** The box to look for a surface in, defaulting to one centred on the origin. */
+function implicitRange(range: [number, number] | undefined, axis: string): [number, number] {
+  if (range === undefined) return [-5, 5];
+  const [low, high] = range;
+  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) {
+    throw new KleinSdkError('invalid_surface_domain', `The ${axis} range needs a finite low and high, in that order.`);
+  }
+  return [low, high];
+}
+
 function withEntity2DStyle<T extends GeometryEntity>(entity: T, style: GeometryLabStyleOptions): T {
   const next = { ...entity } as T & GeometryLabStyleOptions;
   if (style.label !== undefined) next.label = style.label;

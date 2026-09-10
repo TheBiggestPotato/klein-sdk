@@ -18,7 +18,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 7 | 7 | Complete |
 | 5 - Accessibility and output | 5 | 5 | Complete |
-| 6 - Mathematical depth | 3 | 5 | 6.1-6.3 landed |
+| 6 - Mathematical depth | 4 | 5 | 6.1-6.4 landed; 6.5 left |
 
 Run `npm run bench:geometry-lab` for the current numbers, or
 `npm run bench:geometry-lab:check` to compare against the committed baseline.
@@ -1551,9 +1551,54 @@ students who currently get nothing.
   Not gated in `geometry-lab-bench`: the harness is scoped to the Lab and a
   linking case would pull another instrument into it. The numbers above are
   measured and recorded here instead.
-- [ ] **6.4 Implicit surfaces in the SDK.** Marching cubes honouring
-  `maxSamplerProbeEvaluations`. Currently unchecked in the v0 plan and present
-  only in the client.
+- [x] **6.4 Implicit surfaces in the SDK.** `implicit-surfaces.ts`, on the Lab
+  as `addImplicitSurface3D({ input: 'x^2 + y^2 + z^2 = 9' })`.
+
+  **What was missing is a shape, not a notation.** Equation surfaces were
+  *explicit* - `z = f(x, y)`, a height over a rectangle - and a sphere is not
+  the graph of a function. Neither is a torus, a hyperboloid, or anything with
+  two sheets or a hole in it; `x^2 + y^2 + z^2 = 9` was answered with "use an
+  explicit equation such as z = x^2 + y^2", which is to say, use a different
+  shape. An equation is two expressions that have to agree, so the field is
+  their difference and the surface is where it is zero.
+
+  **Tetrahedra rather than cubes, deliberately, and the plan said cubes.** The
+  textbook algorithm classifies each cube's eight corners into one of 256 cases
+  and looks the triangles up in a table. Fifteen of those are *ambiguous* - two
+  corners of a face positive and two negative, with nothing to say whether they
+  join across it - and neighbouring cells resolving that differently leave a
+  hole in the surface. The usual fix is several hundred more entries of
+  disambiguation table. Cutting each cube into six tetrahedra removes the
+  ambiguity instead of tabulating it: a tetrahedron has no face with four
+  corners, so the whole case analysis is "one corner against three" or "two
+  against two". It makes about twice as many triangles for a surface that
+  cannot have holes in it, which for a figure a student rotates is the right way
+  round. All six tetrahedra share the same cube diagonal, so neighbouring cells
+  agree on the faces between them.
+
+  Tested by the property that buys: a sphere and a torus come out with **every
+  edge in exactly two triangles**, and a hyperboloid of two sheets is open only
+  where the box cuts it - every open edge is on the wall, none inside. A torus
+  is in the tests specifically because no height field can have a hole in it.
+
+  **Honouring the budget** is the point the task made, and it is cubic: a
+  resolution of `n` evaluates the equation `(n+1)³` times, so the default 32
+  costs 35,937 and the 3,500,000 the limits allow buys 150.
+  `isosurfaceResolutionWithin` hands a host the best resolution a budget allows
+  rather than making it guess and be refused, and a grid past the budget is
+  refused **before a single evaluation is spent** finding out. Costs 15 ms at
+  the default resolution and 92 ms at 64 - once, when the surface is added, not
+  per frame.
+
+  Smaller decisions worth stating: a vertex is placed by interpolating along the
+  edge it cuts rather than at its midpoint, which is what stops a sphere looking
+  like a cut gem; vertices are shared between triangles by remembering the edge
+  they came from, so a mesh does not carry twice the vertices with seams where
+  their normals disagree; the field is evaluated once per grid corner into a
+  typed array, since an interior corner belongs to eight cells and dozens of
+  tetrahedra; and a corner where the equation is undefined - a division by zero
+  - takes out its own tetrahedron rather than the whole surface, so `1/x = 1`
+  still draws everywhere it is defined.
 - [ ] **6.5 Net folding animation.** `GeometrySceneLink` already declares a
   `netToSolid` kind with nothing animating it, and the fold is the moment nets
   actually make sense to a student.
