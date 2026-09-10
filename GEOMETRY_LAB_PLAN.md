@@ -18,7 +18,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 7 | 7 | Complete |
 | 5 - Accessibility and output | 5 | 5 | Complete |
-| 6 - Mathematical depth | 2 | 5 | 6.1 and 6.2 landed |
+| 6 - Mathematical depth | 3 | 5 | 6.1-6.3 landed |
 
 Run `npm run bench:geometry-lab` for the current numbers, or
 `npm run bench:geometry-lab:check` to compare against the committed baseline.
@@ -1497,10 +1497,60 @@ students who currently get nothing.
   moved. It comes out in the text description, which leads with the exact form
   and keeps the decimal alongside because a surd alone is a puzzle rather than a
   measurement, and in the LaTeX export, which sets it as real mathematics.
-- [ ] **6.3 Multi-representation linking.** `spreadsheet`, `graphing` and
-  `geometry-lab` are separate instruments with no binding: a cell cannot track
-  segment AB as it is dragged. Build push-based on the existing delta bus, never
-  polling.
+- [x] **6.3 Multi-representation linking.** `createValueLinks()` in
+  `src/integrations/linking.ts`. A link names a number in one instrument and a
+  number in another, and keeps the second equal to the first: a graph's
+  parameter tracks a measured length as the figure is dragged, a spreadsheet
+  cell drives a slider, a slider drives a coordinate and the whole figure
+  recomputes around it.
+
+  **Push, never poll**, as the task asked: the link is a subscription to the
+  source's deltas, so nothing runs when nothing moves. A delta whose source is
+  `history` is ignored, because an undo replays an earlier state and pushing
+  from it would write forward the value the student just took back.
+
+  **What stops it looping**, in order of how much work each does: a write that
+  would not change the target is skipped, so a round trip settles after one
+  pass; a propagation carries a depth and one that will not settle is stopped
+  and reported; a link that would close a cycle is refused when it is created;
+  and so is a second link into a value that already follows something, because
+  a value with two sources has no answer. The pushed value is rounded, which is
+  not cosmetic - two floats differing in their last bit never compare equal, so
+  an unrounded round trip is exactly where "skip a write that changes nothing"
+  stops working.
+
+  A linked write is **emitted but not local**: emitted because the instruments
+  default to *not* emitting an applied delta - so that a collaborator's delta
+  does not echo back - and a link write is the opposite case, since everything
+  downstream has to hear it. Not local because that keeps it out of the target's
+  undo stack: undoing a drag should take back the drag and everything that
+  followed in one press, and a linked write with its own entry would make the
+  student press undo twice and leave the two views out of step in between.
+
+  **It was quadratic three times over, and each was a different mistake.**
+  Forty links into one graph cost 6.9 ms per drag to begin with. Applying one
+  delta per link made every commit pay for the whole target snapshot, so writes
+  are gathered per target and applied as one batch. Reading through
+  `getSnapshot` deep-cloned the Geometry Lab twice per link, because that method
+  is contracted to hand back something the caller may write into - the read-only
+  `peekSnapshot` from task 0.6 is what it is for. And the *target* was still
+  being copied once per link to be read, so one snapshot per instrument is now
+  taken for the whole pass, which batching had already made safe by moving every
+  read before every write. Forty links went 4.33 ms, then 2.64 ms, then
+  **0.14 ms**; eighty went from 10.4 ms to 0.52 ms and the growth is now
+  near-linear.
+
+  **The spreadsheet can be a source but not yet a target**, and the link says so
+  when it is created rather than when a student drags something. Its module is
+  still a scaffold - `createStubInstrument` throws on `applyDelta` - so the
+  task's own headline example, a cell tracking segment AB, needs the spreadsheet
+  to become a real instrument first. That is a task about the spreadsheet, not
+  about linking, and implementing half of one inside the other would have left
+  both worse. Everything else works in both directions today.
+
+  Not gated in `geometry-lab-bench`: the harness is scoped to the Lab and a
+  linking case would pull another instrument into it. The numbers above are
+  measured and recorded here instead.
 - [ ] **6.4 Implicit surfaces in the SDK.** Marching cubes honouring
   `maxSamplerProbeEvaluations`. Currently unchecked in the v0 plan and present
   only in the client.
