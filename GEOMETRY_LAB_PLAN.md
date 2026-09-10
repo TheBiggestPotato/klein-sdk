@@ -18,7 +18,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 7 | 7 | Complete |
 | 5 - Accessibility and output | 5 | 5 | Complete |
-| 6 - Mathematical depth | 1 | 5 | 6.1 landed |
+| 6 - Mathematical depth | 2 | 5 | 6.1 and 6.2 landed |
 
 Run `npm run bench:geometry-lab` for the current numbers, or
 `npm run bench:geometry-lab:check` to compare against the committed baseline.
@@ -1452,12 +1452,51 @@ students who currently get nothing.
   when one is missed is quiet: the history diff reported no change, so the
   commit reported nothing had happened and the slider vanished. Worth recording
   as the shape of that work rather than as a surprise.
-- [ ] **6.2 Exact arithmetic for measurements.** `src/math` parses, formats and
-  evaluates; there is no simplification, no symbolic differentiation, no
-  solving. Every measurement is a float, so the tool can say `4.4721` but never
-  `2√5`. A narrow exact-value layer for surds and rationals covers most school
-  geometry without a full CAS, and it lifts the ceiling on what any feedback can
-  say.
+- [x] **6.2 Exact arithmetic for measurements.** `src/math/exact.ts` holds sums
+  of `(n/d)√r` with `r` square-free, and `exact-measurements.ts` computes them
+  from the figure. A measurement now carries `exact` beside `value`, so a length
+  reads `2√5 (about 4.472)` instead of `4.4721`, and a perimeter reads
+  `4 + 4√5` - which is why the layer holds *sums* rather than single terms.
+
+  What it covers, and why that is the right narrow shape: a length between
+  rational points is a surd, an area is a rational because the shoelace formula
+  never takes a root, a perimeter is a sum of surds, and a point-line distance
+  is a surd once the denominator is rationalised - `√2/2`, not `1/√2`. That is
+  nearly everything a lesson measures, and it stops well short of a CAS.
+
+  **Refusing is the load-bearing half.** Three places say no rather than guess:
+
+  - A coordinate is a float, and a float is only a fraction if it was meant to
+    be one. `rationalize` looks for a small fraction by continued fractions and
+    refuses when the smallest one that fits is not small, because a coordinate
+    that came out of a circumcentre of awkward points genuinely is not a nice
+    fraction. One unrecognisable coordinate ends the whole attempt.
+  - Every intermediate is checked against `Number.MAX_SAFE_INTEGER`. Integer
+    arithmetic on doubles is exact to 2^53 and silently wrong past it, and a
+    layer that lost precision quietly would be worse than no layer, since being
+    trusted is all it is for.
+  - The answer is checked against the float before it is returned. Every step is
+    exact, so a disagreement means a mistake in the file rather than rounding.
+
+  And a stale exact value is deleted rather than left behind when a drag moves a
+  point somewhere inexpressible: a confident wrong answer is worse than none.
+
+  **A thing worth knowing came out of the angle work.** Exact angles are found
+  by testing `cos²` - `dot²/(|a|²|b|²)`, a ratio of rationals - against the
+  values that come out whole, which makes it an equality between fractions
+  rather than a near-miss between floats. Doing that showed that **thirty and
+  sixty degrees cannot occur** in a figure with rational coordinates: setting
+  `cos²` to three quarters or a quarter forces `√3` to be rational. Confirmed by
+  exhaustive search over every pair of integer vectors up to sixty - tens of
+  thousands of right angles and forty-fives, and not one thirty. So the table
+  holds only 0, 45, 90, 135 and 180, and a protractor reading 30° here is
+  reading a rounded 30.0000-something that the tool declines to call exact.
+
+  Costs about 3 us per measurement per edit - fifty measurements on a
+  forty-point figure take a drag from 0.27 ms to 0.44 ms - and no benchmark case
+  moved. It comes out in the text description, which leads with the exact form
+  and keeps the decimal alongside because a surd alone is a puzzle rather than a
+  measurement, and in the LaTeX export, which sets it as real mathematics.
 - [ ] **6.3 Multi-representation linking.** `spreadsheet`, `graphing` and
   `geometry-lab` are separate instruments with no binding: a cell cannot track
   segment AB as it is dragged. Build push-based on the existing delta bus, never

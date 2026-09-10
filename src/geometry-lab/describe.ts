@@ -1,3 +1,4 @@
+import { formatExact, type ExactValue } from '../math/index.js';
 import { computeGeometryInvariants, type GeometryInvariantId } from './gradable-invariants.js';
 import { geometryConstructionProtocol } from './protocol.js';
 import type { GeometryLabSnapshot } from './types.js';
@@ -233,18 +234,38 @@ function measurements(snapshot: GeometryLabSnapshot): string[] {
   const flat = snapshot.scene.scene2d.measurements ?? {};
   for (const measurement of Object.values(flat).sort((a, b) => a.id.localeCompare(b.id))) {
     if (measurement.hidden) continue;
-    lines.push(format(measurement.label ?? measurement.kind, measurement.value, measurement.unit));
+    lines.push(format(measurement.label ?? measurement.kind, measurement.value, measurement.unit, measurement.exact));
   }
   const spatial = snapshot.scene.scene3d.measurements ?? {};
   for (const measurement of Object.values(spatial).sort((a, b) => a.id.localeCompare(b.id))) {
-    lines.push(format(measurement.label ?? measurement.kind, measurement.value, measurement.unit));
+    lines.push(format(measurement.label ?? measurement.kind, measurement.value, measurement.unit, undefined));
   }
   return lines;
 }
 
-function format(label: string, value: number, unit: string | undefined): string {
+/**
+ * A measurement as a line of text.
+ *
+ * <p>The exact value leads where there is one, because `2√5` is what the
+ * student is being asked to notice and `4.472` is what stops them noticing it.
+ * The decimal stays alongside: a reader still wants to know roughly how big the
+ * thing is, and a length given only as a surd is a puzzle rather than a
+ * measurement.
+ */
+function format(
+  label: string,
+  value: number,
+  unit: string | undefined,
+  exact: ExactValue | undefined,
+): string {
   const rounded = Number.isFinite(value) ? Math.round(value * 1e3) / 1e3 : value;
-  return unit ? `${label}: ${rounded} ${unit}` : `${label}: ${rounded}`;
+  const written = exact ? formatExact(exact) : null;
+  // The decimal is only worth adding when the exact form does not already read
+  // as one: "8 (about 8)" tells a reader nothing and makes them look twice.
+  const amount = written === null
+    ? String(rounded)
+    : (written === String(rounded) ? written : `${written} (about ${rounded})`);
+  return unit ? `${label}: ${amount} ${unit}` : `${label}: ${amount}`;
 }
 
 /** `A`, `A and B`, `A, B and C` - an Oxford-comma-free list a person would say. */

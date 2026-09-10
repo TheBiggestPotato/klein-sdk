@@ -866,7 +866,7 @@ function validateGeometryTransform2D(value: unknown, path: string, context: Vali
 }
 
 function validateMeasurement2D(value: unknown, path: string, context: ValidationContext): void {
-  const record = exactRecord(value, path, context, ['id', 'kind', 'value', 'unit', 'label', 'color', 'hidden', 'targetIds', 'source']);
+  const record = exactRecord(value, path, context, ['id', 'kind', 'value', 'unit', 'label', 'color', 'hidden', 'targetIds', 'source', 'exact']);
   if (!record) return;
   required(record, 'id', path, context, nonEmptyString);
   required(record, 'kind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['length', 'area', 'angle']));
@@ -877,6 +877,36 @@ function validateMeasurement2D(value: unknown, path: string, context: Validation
   optional(record, 'hidden', path, context, booleanValue);
   optional(record, 'targetIds', path, context, (item, itemPath, itemContext) => array(item, itemPath, itemContext, nonEmptyString));
   required(record, 'source', path, context, validateMeasurementSource2D);
+  optional(record, 'exact', path, context, validateExactValue);
+}
+
+/**
+ * An exact value is derived, so a stored one is only ever a cached answer - but
+ * a malformed one would be read as a real number and shown to a student, so its
+ * shape is checked like anything else that arrives from outside.
+ */
+function validateExactValue(value: unknown, path: string, context: ValidationContext): void {
+  const record = exactRecord(value, path, context, ['terms']);
+  if (!record) return;
+  required(record, 'terms', path, context, (item, itemPath, itemContext) => array(item, itemPath, itemContext, (term, termPath, termContext) => {
+    const parts = exactRecord(term, termPath, termContext, ['numerator', 'denominator', 'radicand']);
+    if (!parts) return;
+    required(parts, 'numerator', termPath, termContext, safeInteger);
+    required(parts, 'denominator', termPath, termContext, positiveSafeInteger);
+    required(parts, 'radicand', termPath, termContext, positiveSafeInteger);
+  }));
+}
+
+function safeInteger(value: unknown, path: string, context: ValidationContext): void {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+    context.issues.push({ path, message: 'Expected an integer that can be held exactly.' });
+  }
+}
+
+function positiveSafeInteger(value: unknown, path: string, context: ValidationContext): void {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    context.issues.push({ path, message: 'Expected a positive integer that can be held exactly.' });
+  }
 }
 
 function validateMeasurementSource2D(value: unknown, path: string, context: ValidationContext): void {

@@ -151,8 +151,9 @@
     "test:phase7": "npm run build && node scripts/phase7-smoke.mjs",
     "test:phase8": "npm run build && node scripts/phase8-smoke.mjs",
     "test:v0": "npm run build && node scripts/geogebra-v0-smoke.mjs && node scripts/collab-reliability-smoke.mjs",
-    "test:ci": "npm run typecheck && npm run build && node --expose-gc --test tests/assessment/*.test.mjs tests/collab/*.test.mjs tests/geometry-lab/*.test.mjs && node scripts/geogebra-v0-smoke.mjs && node scripts/collab-reliability-smoke.mjs && node scripts/graphing-smoke.mjs",
-    "pack:local": "npm pack"
+    "test:ci": "npm run typecheck && npm run build && node --expose-gc --test tests/assessment/*.test.mjs tests/collab/*.test.mjs tests/geometry-lab/*.test.mjs tests/math/*.test.mjs && node scripts/geogebra-v0-smoke.mjs && node scripts/collab-reliability-smoke.mjs && node scripts/graphing-smoke.mjs",
+    "pack:local": "npm pack",
+    "test:math": "npm run build && node --test tests/math/*.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.0.0"

@@ -10,7 +10,7 @@ import {
 import { geometryLabFigureSummary } from './describe.js';
 import { geometryConstructionProtocol } from './protocol.js';
 import { KLEIN_UI_FONT_STACK } from '../theme/index.js';
-import { formatMathNode, parseMath } from '../math/index.js';
+import { formatExact, formatMathNode, parseMath, type ExactValue } from '../math/index.js';
 import type { ExportOptions, Vector2, Vector3 } from '../core/index.js';
 import type { GeometryPoint3D } from '../geometry-core/index.js';
 import {
@@ -1444,14 +1444,17 @@ export function renderGeometryLabLatex(
  */
 function latexMeasurements(snapshot: GeometryLabSnapshot): string[] {
   const rows: string[] = [];
-  const add = (label: string, value: number, unit: string | undefined): void => {
-    const amount = Number.isFinite(value) ? round3(value) : value;
+  const add = (label: string, value: number, unit: string | undefined, exact?: ExactValue): void => {
+    // An exact value set as mathematics is the whole reason a figure is
+    // exported to LaTeX: a worksheet wants 2\sqrt{5}, and 4.472 is what it was
+    // trying not to print.
+    const amount = exact ? formatExact(exact, 'latex') : String(Number.isFinite(value) ? round3(value) : value);
     rows.push(`${latexLabel(label)} & $${amount}${latexUnit(unit)}$ \\\\`);
   };
   for (const measurement of Object.values(snapshot.scene.scene2d.measurements ?? {})
     .sort((left, right) => left.id.localeCompare(right.id))) {
     if (measurement.hidden) continue;
-    add(measurement.label ?? measurement.kind, measurement.value, measurement.unit);
+    add(measurement.label ?? measurement.kind, measurement.value, measurement.unit, measurement.exact);
   }
   for (const measurement of Object.values(snapshot.scene.scene3d.measurements ?? {})
     .sort((left, right) => left.id.localeCompare(right.id))) {

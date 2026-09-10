@@ -1,3 +1,4 @@
+import { exactMeasurement2D } from './exact-measurements.js';
 import type { Vector2, Vector3 } from '../core/index.js';
 import {
   geometryAngleBisectorPoint2D,
@@ -23,6 +24,7 @@ import type {
   GeometryLabSnapshot,
   GeometryScene2D,
   Measurement2D,
+  MeasurementSource2D,
   GeometryScene3D,
   GeometrySelection,
   Measurement3D,
@@ -250,6 +252,30 @@ function assertRecomputableScene2D(snapshot: GeometryLabSnapshot): void {
  * become something it cannot measure, fails the edit rather than keeping a
  * stale value.
  */
+/**
+ * Attaches the exact value to a measurement that has one.
+ *
+ * <p>Derived here rather than on demand, beside the float it belongs to, for
+ * the same reason every other derived thing is: one place rebuilds it, so a
+ * renderer, a description and a LaTeX export cannot each arrive at a different
+ * answer. Absent when no exact form was found, which is not the same as the
+ * value being irrational.
+ */
+function withExact(
+  scene: GeometryScene2D,
+  source: MeasurementSource2D,
+  measurement: Measurement2D,
+): Measurement2D {
+  const exact = exactMeasurement2D(scene, source, measurement.value);
+  if (!exact) {
+    // Deleted rather than left behind: a stale exact value from before a drag
+    // would be a confident wrong answer, which is worse than no answer.
+    const { exact: _dropped, ...rest } = measurement;
+    return rest;
+  }
+  return { ...measurement, exact };
+}
+
 function canonicalizeMeasurements2D(scene: GeometryScene2D): void {
   const measurements = scene.measurements;
   if (!measurements) return;
@@ -289,14 +315,14 @@ function canonicalizeMeasurements2D(scene: GeometryScene2D): void {
       const [first, second] = source.kind === 'pointDistance'
         ? [point(source.firstPointId, id), point(source.secondPointId, id)]
         : linePoints(source.entityId, id);
-      measurements[id] = {
+      measurements[id] = withExact(scene, source, {
         ...measurement,
         value: distance(first, second),
         unit: 'u',
         targetIds: source.kind === 'pointDistance'
           ? [source.firstPointId, source.secondPointId]
           : [source.entityId],
-      };
+      });
       continue;
     }
 
@@ -312,12 +338,12 @@ function canonicalizeMeasurements2D(scene: GeometryScene2D): void {
       }
       // Twice the triangle's area over its base: the perpendicular height.
       const cross = Math.abs(dx * (from.y - first.y) - dy * (from.x - first.x));
-      measurements[id] = {
+      measurements[id] = withExact(scene, source, {
         ...measurement,
         value: cross / length,
         unit: 'u',
         targetIds: [source.pointId, source.entityId],
-      };
+      });
       continue;
     }
 
@@ -331,12 +357,12 @@ function canonicalizeMeasurements2D(scene: GeometryScene2D): void {
         fail('unrecomputable_measurement', id, `Measurement "${id}" has a degenerate angle.`);
       }
       const cosine = clamp((armOne.x * armTwo.x + armOne.y * armTwo.y) / magnitude, -1, 1);
-      measurements[id] = {
+      measurements[id] = withExact(scene, source, {
         ...measurement,
         value: radiansToDegrees(Math.acos(cosine)),
         unit: 'deg',
         targetIds: [...source.pointIds],
-      };
+      });
       continue;
     }
 
@@ -353,12 +379,12 @@ function canonicalizeMeasurements2D(scene: GeometryScene2D): void {
         const next = vertices[(index + 1) % vertices.length] as GeometryPoint2D;
         twiceArea += current.x * next.y - next.x * current.y;
       }
-      measurements[id] = {
+      measurements[id] = withExact(scene, source, {
         ...measurement,
         value: Math.abs(twiceArea) / 2,
         unit: 'u^2',
         targetIds: [source.entityId],
-      };
+      });
       continue;
     }
 
@@ -370,7 +396,12 @@ function canonicalizeMeasurements2D(scene: GeometryScene2D): void {
         vertices[(index + 1) % vertices.length] as GeometryPoint2D,
       );
     }
-    measurements[id] = { ...measurement, value: perimeter, unit: 'u', targetIds: [source.entityId] };
+    measurements[id] = withExact(scene, source, {
+      ...measurement,
+      value: perimeter,
+      unit: 'u',
+      targetIds: [source.entityId],
+    });
   }
 }
 

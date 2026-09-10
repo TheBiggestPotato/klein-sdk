@@ -9,6 +9,7 @@ import type {
   Vector3,
   View2D,
 } from '../core/index.js';
+import type { ExactValue } from '../math/index.js';
 import type {
   GeometryConstraint,
   GeometrySlider,
@@ -87,6 +88,14 @@ export interface Measurement2D {
   hidden?: boolean;
   targetIds?: string[];
   source: MeasurementSource2D;
+  /**
+   * The value written exactly - `2√5` rather than `4.4721` - when there is one.
+   *
+   * <p>Absent means no exact form was found, which is not the same as the value
+   * being irrational: the coordinates may not have been recognisable as
+   * fractions, or an intermediate may have run past what an integer holds here.
+   */
+  exact?: ExactValue;
 }
 
 /** 3D Geometry Lab scene content. Camera state stays in app state, not here. */
