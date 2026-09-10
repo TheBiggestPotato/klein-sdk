@@ -2,6 +2,8 @@
 import { createInstrumentRuntime, KleinSdkError } from '../core/index.js';
 import { svgToPngBlob } from '../export/index.js';
 import { DEFAULT_TRACE_CAPACITY, GeometryTrace } from './trace.js';
+import { foldSolidNet, unfoldSolidNet } from './nets.js';
+import type { FoldedFace3D } from './nets.js';
 import {
   compileImplicitSurface3D,
   isosurfaceEvaluationCount,
@@ -224,6 +226,8 @@ export {
 } from './validation.js';
 export { validateGeometryLabCommand } from './commands.js';
 export { DEFAULT_TRACE_CAPACITY, GeometryTrace } from './trace.js';
+export { foldSolidNet, unfoldSolidNet } from './nets.js';
+export type { FoldedFace3D, NetFacePlacement, UnfoldedNet } from './nets.js';
 export {
   compileImplicitSurface3D,
   isosurfaceEvaluationCount,
@@ -2102,6 +2106,31 @@ class GeometryLabInstrument implements GeometryLab {
       ],
     });
     return net.id;
+  }
+
+  /**
+   * The net part-way folded, at `t` from nought (flat) to one (the solid).
+   *
+   * <p>Derived rather than stored: a fold is a thing a host animates by asking
+   * for it sixty times a second, and putting the intermediate positions in the
+   * document would send every frame of it through undo and every collaborative
+   * message. The net and the solid are what is persisted, and the states in
+   * between are computed from them.
+   */
+  foldNet(netId: string, t: number): FoldedFace3D[] {
+    const net = this.#snapshot.scene.scene3d.nets[netId];
+    if (!net) throw new KleinSdkError('missing_net', `Net "${netId}" does not exist.`);
+    const solid = this.#requireSolid(net.solidId);
+    const scene = this.#snapshot.scene.scene3d;
+    return foldSolidNet(unfoldSolidNet(solid, scene.points), solid, scene.points, finiteNumber(t, 'Fold'));
+  }
+
+  /** Which faces of the flat net lie on top of each other, if any do. */
+  netOverlaps(netId: string): (readonly [string, string])[] {
+    const net = this.#snapshot.scene.scene3d.nets[netId];
+    if (!net) throw new KleinSdkError('missing_net', `Net "${netId}" does not exist.`);
+    const solid = this.#requireSolid(net.solidId);
+    return [...unfoldSolidNet(solid, this.#snapshot.scene.scene3d.points).overlaps];
   }
 
   measureVolume(solidId: string): number {

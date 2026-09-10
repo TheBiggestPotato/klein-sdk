@@ -1,4 +1,5 @@
 import { exactMeasurement2D } from './exact-measurements.js';
+import { unfoldSolidNet } from './nets.js';
 import type { Vector2, Vector3 } from '../core/index.js';
 import {
   geometryAngleBisectorPoint2D,
@@ -1280,32 +1281,39 @@ function canonicalizeNets(scene: GeometryScene3D): void {
   }
 }
 
+/**
+ * The solid laid out flat, its faces joined along the edges they share.
+ *
+ * <p>This used to project each face on its own and set them out in a row with a
+ * gap between them, which is a contact sheet rather than a net: nothing touched
+ * anything, so there were no hinges and nothing to fold. See `nets.ts` for the
+ * unfolding, which is also what the fold is built on - one arrangement, so the
+ * flat shape and the folding shape cannot disagree.
+ */
 function canonicalNet(scene: GeometryScene3D, net: SolidNet3D, solid: SolidEntity): SolidNet3D {
-  const faces: SolidNetFace2D[] = [];
-  let cursorX = 0;
-  for (const face of solid.faces ?? []) {
-    const points = face.pointIds.map(pointId => requirePoint(scene, pointId, net.id, `net face ${face.id}`));
-    if (points.length < 3) {
-      fail('unrecomputable_net', net.id, `Net "${net.id}" has a degenerate source face "${face.id}".`);
-    }
-    const projected = projectFaceTo2D(points);
-    let minX = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    for (const point of projected) {
-      minX = Math.min(minX, point.x);
-      maxX = Math.max(maxX, point.x);
-      minY = Math.min(minY, point.y);
-    }
-    const vertices = projected.map(point => ({ x: point.x - minX + cursorX, y: point.y - minY }));
-    cursorX += maxX - minX + 0.5;
-    faces.push({
-      id: `${net.id}-${face.id}`,
-      sourceFaceId: face.id,
-      vertices,
-      area: face.area ?? polygonArea3D(points),
-    });
+  let unfolded;
+  try {
+    unfolded = unfoldSolidNet(solid, scene.points);
+  } catch (error) {
+    fail(
+      'unrecomputable_net',
+      net.id,
+      error instanceof Error ? error.message : `Net "${net.id}" could not be unfolded.`,
+    );
+    throw error;
   }
+
+  const faces: SolidNetFace2D[] = unfolded.faces.map((placement) => {
+    const source = (solid.faces ?? []).find(face => face.id === placement.faceId);
+    const points = (source?.pointIds ?? []).map(pointId =>
+      requirePoint(scene, pointId, net.id, `net face ${placement.faceId}`));
+    return {
+      id: `${net.id}-${placement.faceId}`,
+      sourceFaceId: placement.faceId,
+      vertices: placement.vertices.map(vertex => ({ x: vertex.x, y: vertex.y })),
+      area: source?.area ?? polygonArea3D(points),
+    };
+  });
   if (!faces.length) fail('unrecomputable_net', net.id, `Net "${net.id}" has no source faces.`);
   return {
     ...net,

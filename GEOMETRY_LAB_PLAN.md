@@ -18,7 +18,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 | 3 - Transformations and constraints | 3 | 3 | **Complete.** Transformations are live constructions; constraints are enforced |
 | 4 - The learning layer | 7 | 7 | Complete |
 | 5 - Accessibility and output | 5 | 5 | Complete |
-| 6 - Mathematical depth | 4 | 5 | 6.1-6.4 landed; 6.5 left |
+| 6 - Mathematical depth | 5 | 5 | Complete |
 
 Run `npm run bench:geometry-lab` for the current numbers, or
 `npm run bench:geometry-lab:check` to compare against the committed baseline.
@@ -1599,9 +1599,55 @@ students who currently get nothing.
   tetrahedra; and a corner where the equation is undefined - a division by zero
   - takes out its own tetrahedron rather than the whole surface, so `1/x = 1`
   still draws everywhere it is defined.
-- [ ] **6.5 Net folding animation.** `GeometrySceneLink` already declares a
-  `netToSolid` kind with nothing animating it, and the fold is the moment nets
-  actually make sense to a student.
+- [x] **6.5 Net folding animation.** `nets.ts`, on the Lab as
+  `foldNet(netId, t)` for `t` from nought (flat) to one (the solid).
+
+  **The net was not a net.** Before anything could fold, that had to be fixed:
+  `canonicalNet` projected each face of the solid flat *on its own* and laid
+  them out in a row with a half-unit gap between them. That is a contact sheet
+  of faces. A net's faces are joined along the edges they share, those joins are
+  the hinges, and without them there is nothing to fold - which is exactly why
+  nothing folded. The faces are now arranged into a spanning tree over "shares
+  an edge" and each is placed by unfolding it about the edge it hangs from, so a
+  cube comes out as the familiar cross rather than as six squares in a line.
+
+  Two decisions inside the unfolding. The tree is built **breadth-first**,
+  because a depth-first walk trails a cube into a strip of six squares - a valid
+  net, and a bad one to cut out. And which side of its hinge a face lands on is
+  decided by pushing it away from its parent's middle: both sides are
+  geometrically valid unfoldings and only one of them does not land back on top
+  of the face it came from. Getting that from the face normal instead - the
+  first thing I tried - put every face exactly on its parent, because it depends
+  on which way round the corners happen to be listed.
+
+  **The fold is hierarchical, and that is the whole of it.** Each face's motion
+  is its parent's, then a turn about its own hinge - so rotating a face carries
+  everything hanging off it and the shape stays joined the whole way through.
+  Interpolating each face independently from flat to folded would put them all
+  in the right places at one and nowhere near each other in between: a shape
+  exploding and reassembling rather than folding.
+
+  **The hinge angles are not measured off the solid.** Each face has an exact
+  rigid motion taking its flat copy to its place in the solid, and a face's turn
+  is its parent's motion undone and its own applied - which necessarily fixes
+  the edge they share, so it *is* a rotation about the hinge and its angle reads
+  straight out of the matrix. That removes the sign ambiguity a dihedral angle
+  computed with a dot product has, and it makes the fold exact at `t = 1` by
+  construction rather than by luck. The test measures it: a cube, a tetrahedron,
+  a prism and a pyramid all land on their solid to **two parts in ten to the
+  sixteenth**, and the hinges hold to the same at every `t` in between.
+
+  Nothing about the fold is stored. A host animates one by asking for it sixty
+  times a second, and the states in between would otherwise go through undo and
+  every collaborative message; a frame costs 0.03 ms for a cube and 0.06 ms for
+  a thirteen-face pyramid.
+
+  **Overlaps are reported, not promised away.** Whether every convex polyhedron
+  even *has* a non-overlapping unfolding is an open question in mathematics, so
+  a promise not to overlap is one this cannot keep. `netOverlaps` says which
+  faces landed on each other, so a host can offer another arrangement or a
+  warning rather than printing something that will not cut out. None of the
+  solids the instrument builds overlaps today.
 
 ## 11. New complexity limits
 
