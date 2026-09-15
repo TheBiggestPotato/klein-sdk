@@ -1014,7 +1014,7 @@ Tasks:
 - [x] Add client, API, and relay liveness/readiness contracts plus production-image health smoke before publication/deployment.
 - [x] Add request correlation, Prometheus exposure, operator alert guidance, and post-deploy endpoint verification.
 - [x] Make production deployment manual, serialized, health-waiting, and followed by smoke verification.
-- [x] Normalize an empty `NEXT_PUBLIC_API_URL` to `/api` so Docker/GitLab builds cannot silently request `/auth/*` instead of `/api/auth/*`.
+- [x] Normalize an empty `NEXT_PUBLIC_API_URL` to `/api` so Docker/CI builds cannot silently request `/auth/*` instead of `/api/auth/*`.
 - [x] Replace stale `klein-whiteboard-sdk` and private npm-token instructions in `klein-server/deploy/README.md` with the committed `klein-sdk` vendor artifact flow.
 - [x] Correct the backup restore runbook so the smoke drill uses isolated restore volumes/project names and cannot run `pg_restore --clean` against the active deployment database; the first local drill restored 23 tables successfully.
 
@@ -1107,7 +1107,7 @@ Required before the first external preview deployment:
 - [ ] Split, review, and commit the four broad release worktrees; use the deployment checklist and current `git status` rather than stale path counts.
 - [x] Fix `klein-tests` workflow triggers for the active `master` branch and add typecheck/mobile result coverage.
 - [ ] Push the deferred release commits and require green remote SDK, client, server, and tests pipelines before image deployment.
-- [x] Treat an empty `NEXT_PUBLIC_API_URL` as `/api`, with a deployment-config regression script; Docker/GitLab build arguments explicitly use `/api`.
+- [x] Treat an empty `NEXT_PUBLIC_API_URL` as `/api`, with a deployment-config regression script; Docker/CI build arguments explicitly use `/api`.
 - [x] Normalize unset/blank collaboration URLs for local builds, validate `ws://`/`wss://` syntax centrally, and reject missing or non-`wss://` collaboration URLs in release-image CI.
 - [x] Update deployment documentation to remove retired SDK/private npm instructions and document the actual committed vendor artifact flow.
 - [ ] Choose the preview host and domains, install real secrets, provision DNS, and start the base Compose plus Caddy overlay.

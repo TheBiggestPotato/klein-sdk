@@ -172,7 +172,7 @@ Status: `[~]` the production environment contract, same-origin API behavior, and
 - [x] Upload storage path configured as `/app/uploads` with a Docker volume.
 - [x] Normalize blank `NEXT_PUBLIC_API_URL` values to `/api`; `resolvePublicApiBaseUrl()` handles unset, blank, whitespace-only, and trailing-slash values, with a dedicated deployment-config regression script.
 - [x] Normalize blank local collaboration URLs, validate the shared WebSocket base URL for every client collaboration surface, and require `wss://` for release images.
-- [x] Standardize v0 on same-origin `/api` through the Next proxy. Docker and GitLab builds explicitly use `/api`; the server deployment guide documents the flow.
+- [x] Standardize v0 on same-origin `/api` through the Next proxy. Docker and CI builds explicitly use `/api`; the server deployment guide documents the flow.
 - [x] Add target-host tooling: `provision-ubuntu.sh`, `validate-env.sh`, `first-deploy.sh`, immutable image-tag updates, service-scoped rollback, and endpoint verification scripts.
 - [ ] Choose the preview VM/provider and production domains, then create `/opt/klein/.env` with generated production secrets and immutable service tags.
 
