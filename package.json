@@ -17,11 +17,7 @@
     "dist",
     "apps",
     "fixtures",
-    "docs/ASSESSMENT_CONTRACT_V1.md",
-    "docs/V0_API.md",
     "integrations",
-    "GEOGEBRA_V0_SDK_IMPLEMENTATION_PLAN.md",
-    "V0_DEPLOYMENT_CHECKLIST.md",
     "README.md"
   ],
   "exports": {
@@ -153,7 +149,8 @@
     "test:v0": "npm run build && node scripts/geogebra-v0-smoke.mjs && node scripts/collab-reliability-smoke.mjs",
     "test:ci": "npm run typecheck && npm run build && node --expose-gc --test tests/assessment/*.test.mjs tests/collab/*.test.mjs tests/geometry-lab/*.test.mjs tests/integrations/*.test.mjs tests/math/*.test.mjs && node scripts/geogebra-v0-smoke.mjs && node scripts/collab-reliability-smoke.mjs && node scripts/graphing-smoke.mjs",
     "pack:local": "npm pack",
-    "test:math": "npm run build && node --test tests/math/*.test.mjs"
+    "test:math": "npm run build && node --test tests/math/*.test.mjs",
+    "gallery": "npm run build && node examples/render-gallery.mjs"
   },
   "devDependencies": {
     "typescript": "^5.0.0"
