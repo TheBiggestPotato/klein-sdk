@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="440" viewBox="0 0 720 440">
+    <defs>
+  <marker id="kwb-arrow-end" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path>
+  </marker>
+  <marker id="kwb-arrow-start" markerWidth="10" markerHeight="10" refX="2" refY="5" orient="auto-start-reverse" markerUnits="strokeWidth">
+    <path d="M 10 0 L 0 5 L 10 10 z" fill="context-stroke"></path>
+  </marker>
+</defs>
+    <rect x="0" y="0" width="720" height="440" fill="#ffffff"></rect>
+    
+    <defs>
+      <pattern id="kwb-grid" x="20" y="20" width="32" height="32" patternUnits="userSpaceOnUse">
+        <circle cx="16" cy="16" r="1.2" fill="#d6dde8"></circle>
+      </pattern>
+    </defs>
+    <rect x="0" y="0" width="720" height="440" fill="url(#kwb-grid)" opacity="0.75"></rect>
+  
+    <g class="kwb-world" style="cursor:default" transform="translate(20 20) scale(1)">
+      <g data-kwb-id="frame" class="kwb-el">
+      <rect x="20" y="20" width="680" height="400" rx="14" fill="transparent" stroke="#94a3b8" stroke-width="2" stroke-dasharray="12 8" vector-effect="non-scaling-stroke"></rect>
+      <text x="36" y="10" fill="#94a3b8" font-size="20" font-weight="650">Aria triunghiului</text>
+    </g><polygon data-kwb-id="tri" class="kwb-el" fill="#dbeafe" stroke="#2563eb" stroke-width="3" vector-effect="non-scaling-stroke" points="210,90 340,310 80,310"></polygon><line data-kwb-id="h" class="kwb-el" x1="210" y1="90" x2="210" y2="310" stroke="#d97706" stroke-width="2" stroke-linecap="round" vector-effect="non-scaling-stroke" stroke-dasharray="8 8"></line><line data-kwb-id="b" class="kwb-el" x1="80" y1="330" x2="340" y2="330" stroke="#16a34a" stroke-width="2" stroke-linecap="round" vector-effect="non-scaling-stroke" marker-start="url(#kwb-arrow-start)" marker-end="url(#kwb-arrow-end)"></line><text data-kwb-id="t-b" class="kwb-el kwb-text" x="200" y="340" fill="#16a34a" font-size="20" font-weight="700"><tspan x="200" y="340">b</tspan></text><text data-kwb-id="t-h" class="kwb-el kwb-text" x="218" y="190" fill="#d97706" font-size="20" font-weight="700"><tspan x="218" y="190">h</tspan></text><g data-kwb-id="formula" class="kwb-el">
+      <rect x="400" y="100" width="240" height="110" rx="10" fill="#fef3c7" stroke="rgba(23,32,51,0.16)" vector-effect="non-scaling-stroke"></rect>
+      <path d="M 606 100 L 640 134 L 606 134 Z" fill="rgba(255,255,255,0.36)"></path>
+      <text x="416" y="128" fill="#172033" font-size="18" font-weight="560"><tspan x="416" y="128">A = b · h / 2</tspan></text>
+    </g><text data-kwb-id="note" class="kwb-el kwb-text" x="400" y="240" fill="#334155" font-size="18" font-weight="500"><tspan x="400" y="240">Înălțimea cade</tspan><tspan x="400" y="262.5">perpendicular pe bază.</tspan></text><g data-kwb-id="ok" class="kwb-el">
+      <circle cx="640" cy="350" r="20" fill="#16a34a" opacity="0.12"></circle>
+      <circle cx="640" cy="350" r="17" fill="transparent" stroke="#16a34a" stroke-width="3" vector-effect="non-scaling-stroke"></circle>
+      <text x="640" y="359" text-anchor="middle" fill="#16a34a" font-size="26" font-weight="760">OK</text>
+    </g>
+      
+    </g>
+  </svg>
