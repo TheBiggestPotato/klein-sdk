@@ -58,6 +58,44 @@ export const DEFAULT_TOLERANCES = Object.freeze({
 });
 
 /**
+ * Tolerances for a machine the baseline was not recorded on.
+ *
+ * <p>The calibration loop normalizes arithmetic speed, which is the part of a
+ * machine that differs least. What these benchmarks actually spend their time
+ * on is allocation, collection and memory bandwidth, and a shared CI runner is
+ * two to four times slower at those than the laptop the baseline came from —
+ * uniformly, across every case, which is drift rather than regression.
+ *
+ * <p>So elsewhere the time gate is dropped and the two portable signals are
+ * kept: retained heap is the same allocation on every machine, and a growth
+ * exponent is measured across two sizes inside one process. A quadratic that
+ * should be linear still fails here; a slower runner does not. Times are still
+ * measured and printed, because the numbers are worth reading even where they
+ * cannot be gated.
+ */
+export const PORTABLE_TOLERANCES = Object.freeze({
+  ...DEFAULT_TOLERANCES,
+  normalizedTime: Infinity,
+});
+
+/**
+ * Whether this process is the machine the baseline was recorded on. Nothing can
+ * prove that, so the question is answered the practical way: a developer running
+ * the benchmark locally gates on time, CI does not. `KLEIN_BENCH_TIME_GATE`
+ * forces it either way — `1` to gate, `0` not to.
+ */
+export function timeGateApplies(env = process.env) {
+  if (env.KLEIN_BENCH_TIME_GATE === '1') return true;
+  if (env.KLEIN_BENCH_TIME_GATE === '0') return false;
+  return env.CI !== 'true' && env.CI !== '1';
+}
+
+/** The tolerances this machine should be held to. */
+export function tolerancesForEnvironment(env = process.env) {
+  return timeGateApplies(env) ? DEFAULT_TOLERANCES : PORTABLE_TOLERANCES;
+}
+
+/**
  * Retentions below this are not gated. A tens-of-kilobytes figure swings by
  * more than the heap tolerance purely on where the collector happened to stop,
  * so gating it would flake without ever catching anything: the retention this
@@ -906,7 +944,10 @@ if (isMain) {
     writeBaseline(results);
     process.stdout.write(`\nBaseline written to ${BASELINE_PATH}\n`);
   } else if (args.has('--check')) {
-    const comparison = compareToBaseline(results, readBaseline());
+    const comparison = compareToBaseline(results, readBaseline(), tolerancesForEnvironment());
+    if (!timeGateApplies()) {
+      process.stdout.write('\nTime is reported, not gated: this is not the machine the baseline was recorded on.\n');
+    }
     if (!comparison.ok) {
       process.stdout.write('\nRegressions against baseline:\n');
       for (const regression of comparison.regressions) {
