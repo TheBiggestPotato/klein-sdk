@@ -16,6 +16,29 @@ import type {
   View2D,
 } from '../core/index.js';
 import {
+  escapePdfText,
+  pdfDocument,
+  pdfFillColor,
+  pdfNumber,
+  pdfStrokeColor,
+  pdfText,
+  svgToPngBlob,
+} from '../export/index.js';
+import {
+  buildAngleBisector2D,
+  buildCircleByCenterPoint2D,
+  buildCircleThroughPoints2D,
+  buildConstructedLine2D,
+  buildIntersection2D,
+  buildLineThroughPoints2D,
+  buildMidpoint2D,
+  constrainGeometryScene,
+  geometryAdjustSegmentLength as adjustSegmentLength,
+  geometryLineConstraintPointIds as lineConstraintPointIds,
+  geometrySegmentLength as segmentLength,
+  geometrySetCircleRadius as setCircleRadius,
+  geometrySetPointOnAngle as setPointOnAngle,
+  geometrySetPointPosition as setPointPosition,
   buildGeometryDependencyGraph,
   buildGeometryObjectPanelRows,
   createEmptyGeometryScene,
@@ -1818,15 +1841,11 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     this.#requireDistinctPoints(firstPointId, secondPointId);
     const first = this.#requirePoint2D(firstPointId);
     const second = this.#requirePoint2D(secondPointId);
-    const position = midpoint2D(first, second);
-    const point = withPointStyle({
-      id: this.#ids.next('p'),
-      kind: 'point2d',
-      x: position.x,
-      y: position.y,
-      locked: true,
-      construction: { kind: 'midpoint', sourceIds: [first.id, second.id] },
-    }, style);
+    // The record is shaped by the shared builder; the theme, the selection and
+    // the delta shape below are this instrument's own conventions.
+    const built = buildMidpoint2D(this.#snapshot.scene, first.id, second.id, prefix => this.#ids.next(prefix));
+    if (!built) throw new KleinSdkError('invalid_midpoint', 'A midpoint needs two distinct points.');
+    const point = withPointStyle(built.points[0] as GeometryPoint2D, style);
     this.#commitDelta({ op: 'addPoint', point: { ...point, locked: true } });
     this.#select({ kind: 'point', id: point.id });
     return point.id;
@@ -1842,18 +1861,11 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     this.#requireDistinctEntities(firstEntityId, secondEntityId);
     const first = this.#requireIntersectableEntity(firstEntityId);
     const second = this.#requireIntersectableEntity(secondEntityId);
-    const point = geometryIntersectionPoint2D(this.#snapshot.scene, first.id, second.id, index);
-    if (!point) {
+    const built = buildIntersection2D(this.#snapshot.scene, first.id, second.id, prefix => this.#ids.next(prefix), index);
+    if (!built) {
       throw new KleinSdkError('no_intersection', 'The selected objects do not intersect in a usable point.');
     }
-    const created = withPointStyle({
-      id: this.#ids.next('p'),
-      kind: 'point2d',
-      x: point.x,
-      y: point.y,
-      locked: true,
-      construction: { kind: 'intersection', sourceIds: [first.id, second.id], index },
-    }, style);
+    const created = withPointStyle(built.points[0] as GeometryPoint2D, style);
     this.#commitDelta({ op: 'addPoint', point: { ...created, locked: true } });
     this.#select({ kind: 'point', id: created.id });
     return created.id;
@@ -1952,31 +1964,22 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   ): string {
     this.#assertWritable();
     for (const pointId of pointIds) this.#requirePoint2D(pointId);
-    const vertex = this.#requirePoint2D(pointIds[1]);
-    const helperPosition = geometryAngleBisectorPoint2D(this.#snapshot.scene, pointIds);
-    if (!helperPosition) {
+    this.#requirePoint2D(pointIds[1]);
+    const built = buildAngleBisector2D(this.#snapshot.scene, pointIds, prefix => this.#ids.next(prefix));
+    if (!built) {
       throw new KleinSdkError('invalid_angle_bisector', 'Choose three non-degenerate points.');
     }
-    const equation = lineEquationFrom2DPoints(vertex, helperPosition);
-    if (!equation) {
-      throw new KleinSdkError('invalid_angle_bisector', 'Choose three non-degenerate points.');
-    }
+    // The builder leaves the helper unstyled; the Calculator paints it so that
+    // an unhidden helper matches the line it defines.
     const helper: GeometryPoint2D = {
-      id: this.#ids.next('p'),
-      kind: 'point2d',
-      x: helperPosition.x,
-      y: helperPosition.y,
+      ...(built.points[0] as GeometryPoint2D),
       color: style.color ?? this.#theme.drawColor,
-      hidden: true,
-      locked: true,
     };
-    const entity = withEntityStyle<LineEntity>({
-      id: this.#ids.next('line'),
-      kind: 'line',
-      pointIds: [vertex.id, helper.id],
-      equation,
-      construction: { kind: 'angleBisector', pointIds },
-    }, style, this.#theme.drawColor);
+    const entity = withEntityStyle<LineEntity>(
+      built.entities[0] as LineEntity,
+      style,
+      this.#theme.drawColor,
+    );
     this.#commitDelta({
       op: 'batch',
       deltas: [
@@ -1993,13 +1996,9 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     this.#requireDistinctPoints(firstPointId, secondPointId);
     const first = this.#requirePoint2D(firstPointId);
     const second = this.#requirePoint2D(secondPointId);
-    const entity = withEntityStyle<LineEntity>({
-      id: this.#ids.next('line'),
-      kind: 'line',
-      pointIds: [first.id, second.id],
-      equation: lineEquationFromPoints(first, second),
-      construction: { kind: 'lineThroughPoints', sourceIds: [first.id, second.id] },
-    }, style, this.#theme.drawColor);
+    const built = buildLineThroughPoints2D(this.#snapshot.scene, first.id, second.id, prefix => this.#ids.next(prefix));
+    if (!built) throw new KleinSdkError('invalid_line', 'A line needs two distinct points.');
+    const entity = withEntityStyle<LineEntity>(built.entities[0] as LineEntity, style, this.#theme.drawColor);
     this.#commitDelta({ op: 'addEntity', entity });
     this.#select({ kind: 'entity', id: entity.id });
     return entity.id;
@@ -2252,23 +2251,20 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   ): string {
     this.#assertWritable();
     this.#requireDistinctPoints(centerPointId, radiusPointId);
-    const center = this.#requirePoint2D(centerPointId);
-    const radiusPoint = this.#requirePoint2D(radiusPointId);
-    const radius = distance2D(center, radiusPoint);
-    if (!Number.isFinite(radius) || radius <= 0) {
+    this.#requirePoint2D(centerPointId);
+    this.#requirePoint2D(radiusPointId);
+    const built = buildCircleByCenterPoint2D(
+      this.#snapshot.scene,
+      centerPointId,
+      radiusPointId,
+      prefix => this.#ids.next(prefix),
+    );
+    if (!built) {
       throw new KleinSdkError('invalid_circle', 'Circle radius must be a positive number.');
     }
     const entity = withEntityStyle<CircleEntity>({
-      id: this.#ids.next('circle'),
-      kind: 'circle',
-      centerId: center.id,
-      radius,
+      ...(built.entities[0] as CircleEntity),
       fillColor: style.fillColor ?? colorWithAlpha(style.color ?? this.#theme.drawColor, 0.1),
-      construction: {
-        kind: 'circleCenterPoint',
-        centerPointId: center.id,
-        radiusPointId: radiusPoint.id,
-      },
     }, style, this.#theme.drawColor);
     this.#commitDelta({ op: 'addEntity', entity });
     this.#select({ kind: 'entity', id: entity.id });
@@ -2278,26 +2274,22 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   addCircleThroughPoints(pointIds: [string, string, string], style: GeometryStyleOptions = {}): string {
     this.#assertWritable();
     for (const pointId of pointIds) this.#requirePoint2D(pointId);
-    const circle = geometryCircumcircle2D(this.#snapshot.scene, pointIds);
-    if (!circle) {
+    const built = buildCircleThroughPoints2D(this.#snapshot.scene, pointIds, prefix => this.#ids.next(prefix));
+    if (!built) {
       throw new KleinSdkError('invalid_circle', 'Choose three non-collinear points.');
     }
+    // The circle's own recomputation already carries its centre along, so the
+    // builder leaves the centre bare. The Calculator additionally records the
+    // centre as a circumcentre, which is what makes it show up as derived from
+    // the three points in the object panel and the dependency cascade.
     const center = withPointStyle({
-      id: this.#ids.next('p'),
-      kind: 'point2d',
-      x: circle.center.x,
-      y: circle.center.y,
-      hidden: true,
-      locked: true,
+      ...(built.points[0] as GeometryPoint2D),
       construction: { kind: 'circumcenter', pointIds },
     }, style);
     const entity = withEntityStyle<CircleEntity>({
-      id: this.#ids.next('circle'),
-      kind: 'circle',
+      ...(built.entities[0] as CircleEntity),
       centerId: center.id,
-      radius: circle.radius,
       fillColor: style.fillColor ?? colorWithAlpha(style.color ?? this.#theme.drawColor, 0.1),
-      construction: { kind: 'circleThroughPoints', pointIds },
     }, style, this.#theme.drawColor);
     this.#commitDelta({
       op: 'batch',
@@ -2957,20 +2949,29 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
     this.#assertWritable();
     const source = this.#requireLineLikeEntity(sourceEntityId);
     const through = this.#requirePoint2D(throughPointId);
-    const sourceEquation = entityLineEquation(this.#snapshot.scene, source);
-    const equation = constructedLineEquation(constructionKind, sourceEquation, through);
-    const helper = helperPointForLineEquation(equation, through, this.#ids, style.color ?? this.#theme.drawColor);
-    const entity = withEntityStyle<LineEntity>({
-      id: this.#ids.next('line'),
-      kind: 'line',
-      pointIds: [through.id, helper.id],
-      equation,
-      construction: {
-        kind: constructionKind,
-        sourceLineId: source.id,
-        throughPointId: through.id,
-      },
-    }, style, this.#theme.drawColor);
+    // Called for its refusals: a source whose points have gone missing is a
+    // `missing_point`, which the builder cannot distinguish from any other
+    // reason for having no equation.
+    entityLineEquation(this.#snapshot.scene, source);
+    const built = buildConstructedLine2D(
+      this.#snapshot.scene,
+      constructionKind,
+      source.id,
+      through.id,
+      prefix => this.#ids.next(prefix),
+    );
+    if (!built) {
+      throw new KleinSdkError('invalid_line_equation', 'Line equation must have a finite x or y coefficient.');
+    }
+    const helper: GeometryPoint2D = {
+      ...(built.points[0] as GeometryPoint2D),
+      color: style.color ?? this.#theme.drawColor,
+    };
+    const entity = withEntityStyle<LineEntity>(
+      built.entities[0] as LineEntity,
+      style,
+      this.#theme.drawColor,
+    );
     this.#commitDelta({
       op: 'batch',
       deltas: [
@@ -4654,13 +4655,19 @@ class GeometryCalculatorInstrument implements GeometryCalculator {
   ): SegmentEntity | LineEntity | RayEntity | VectorEntity {
     this.#requireDistinctPoints(firstPointId, secondPointId);
     if (tool === 'line') {
-      return withEntityStyle<LineEntity>({
-        id: this.#ids.next('line'),
-        kind: 'line',
-        pointIds: [firstPointId, secondPointId],
-        equation: lineEquationFromPoints(this.#requirePoint2D(firstPointId), this.#requirePoint2D(secondPointId)),
-        construction: { kind: 'lineThroughPoints', sourceIds: [firstPointId, secondPointId] },
-      }, {}, this.#theme.drawColor);
+      // Called for their refusals, which the builder folds into a single null.
+      this.#requirePoint2D(firstPointId);
+      this.#requirePoint2D(secondPointId);
+      // The same builder the `addLineByPoints` API path uses, so a line drawn
+      // with the tool and a line added through the API cannot differ.
+      const built = buildLineThroughPoints2D(
+        this.#snapshot.scene,
+        firstPointId,
+        secondPointId,
+        prefix => this.#ids.next(prefix),
+      );
+      if (!built) throw new KleinSdkError('degenerate_line', 'A line needs two distinct points.');
+      return withEntityStyle<LineEntity>(built.entities[0] as LineEntity, {}, this.#theme.drawColor);
     }
     if (tool === 'ray') {
       return withEntityStyle<RayEntity>({
@@ -6332,333 +6339,6 @@ function segmentIntersectsRect(a: Vector2, b: Vector2, rect: WorldBounds): boole
   return false;
 }
 
-function constrainGeometryScene(
-  scene: GeometryCalculatorScene,
-  changedIds: Iterable<string>,
-): GeometryCalculatorScene {
-  const constraints = Object.values(scene.constraints ?? {}).filter(constraint => constraint.enabled !== false);
-  if (!constraints.length) return scene;
-
-  const changedSet = new Set(changedIds);
-  let next = scene;
-  for (let iteration = 0; iteration < CONSTRAINT_SOLVER_ITERATIONS; iteration += 1) {
-    let changed = false;
-    for (const constraint of constraints) {
-      const before = next;
-      next = enforceGeometryConstraint(next, constraint, changedSet);
-      if (next !== before) changed = true;
-    }
-    if (!changed) break;
-    next = recomputeGeometryScene(next);
-  }
-  return next;
-}
-
-function enforceGeometryConstraint(
-  scene: GeometryCalculatorScene,
-  constraint: GeometryConstraint,
-  changedSet: Set<string>,
-): GeometryCalculatorScene {
-  switch (constraint.kind) {
-    case 'fixedLength':
-      return enforceFixedLengthConstraint(scene, constraint.pointIds, constraint.length, changedSet);
-    case 'fixedAngle':
-      return enforceFixedAngleConstraint(scene, constraint.pointIds, constraint.degrees, changedSet);
-    case 'parallel':
-      return enforceDirectionConstraint(scene, constraint.entityIds, changedSet, false);
-    case 'perpendicular':
-      return enforceDirectionConstraint(scene, constraint.entityIds, changedSet, true);
-    case 'equalLength':
-      return enforceEqualLengthConstraint(scene, constraint.segments, changedSet);
-    case 'equalRadius':
-      return enforceEqualRadiusConstraint(scene, constraint.circleIds, changedSet);
-  }
-}
-
-function enforceFixedLengthConstraint(
-  scene: GeometryCalculatorScene,
-  pointIds: [string, string],
-  length: number,
-  changedSet: Set<string>,
-): GeometryCalculatorScene {
-  return adjustSegmentLength(scene, pointIds, length, changedSet);
-}
-
-function enforceEqualLengthConstraint(
-  scene: GeometryCalculatorScene,
-  segments: [[string, string], [string, string]],
-  changedSet: Set<string>,
-): GeometryCalculatorScene {
-  const [firstIds, secondIds] = segments;
-  const firstLength = segmentLength(scene, firstIds);
-  const secondLength = segmentLength(scene, secondIds);
-  if (!Number.isFinite(firstLength) || !Number.isFinite(secondLength) || firstLength <= 0 || secondLength <= 0) {
-    return scene;
-  }
-  const firstChanged = idsIntersect(firstIds, changedSet);
-  const secondChanged = idsIntersect(secondIds, changedSet);
-  if (firstChanged && !secondChanged) return adjustSegmentLength(scene, firstIds, secondLength, changedSet);
-  return adjustSegmentLength(scene, secondIds, firstLength, changedSet);
-}
-
-function enforceFixedAngleConstraint(
-  scene: GeometryCalculatorScene,
-  pointIds: [string, string, string],
-  degrees: number,
-  changedSet: Set<string>,
-): GeometryCalculatorScene {
-  const [firstId, vertexId, secondId] = pointIds;
-  const first = point2D(scene, firstId);
-  const vertex = point2D(scene, vertexId);
-  const second = point2D(scene, secondId);
-  if (!first || !vertex || !second || !Number.isFinite(degrees)) return scene;
-
-  const secondEditable = isEditablePoint(scene, secondId);
-  const firstEditable = isEditablePoint(scene, firstId);
-  const moveSecond = secondEditable && (
-    changedSet.has(secondId)
-    || changedSet.has(vertexId)
-    || !changedSet.has(firstId)
-    || !firstEditable
-  );
-
-  if (moveSecond) {
-    return setPointOnAngle(scene, {
-      moveId: secondId,
-      anchor: vertex,
-      base: first,
-      current: second,
-      degrees,
-    });
-  }
-  if (firstEditable) {
-    return setPointOnAngle(scene, {
-      moveId: firstId,
-      anchor: vertex,
-      base: second,
-      current: first,
-      degrees,
-    });
-  }
-  return scene;
-}
-
-function enforceDirectionConstraint(
-  scene: GeometryCalculatorScene,
-  entityIds: [string, string],
-  changedSet: Set<string>,
-  perpendicular: boolean,
-): GeometryCalculatorScene {
-  const firstIds = lineConstraintPointIds(scene, entityIds[0]);
-  const secondIds = lineConstraintPointIds(scene, entityIds[1]);
-  if (!firstIds || !secondIds) return scene;
-
-  const firstChanged = idsIntersect([...firstIds, entityIds[0]], changedSet);
-  const secondChanged = idsIntersect([...secondIds, entityIds[1]], changedSet);
-  const targetIds = firstChanged && !secondChanged ? firstIds : secondIds;
-  const sourceIds = targetIds === firstIds ? secondIds : firstIds;
-  const sourceDirection = segmentDirection(scene, sourceIds);
-  if (!sourceDirection) return scene;
-  const direction = perpendicular
-    ? { x: -sourceDirection.y, y: sourceDirection.x }
-    : sourceDirection;
-  return adjustLineDirection(scene, targetIds, direction, changedSet);
-}
-
-function enforceEqualRadiusConstraint(
-  scene: GeometryCalculatorScene,
-  circleIds: [string, string],
-  changedSet: Set<string>,
-): GeometryCalculatorScene {
-  const first = scene.entities[circleIds[0]];
-  const second = scene.entities[circleIds[1]];
-  if (first?.kind !== 'circle' || second?.kind !== 'circle') return scene;
-  if (!Number.isFinite(first.radius) || !Number.isFinite(second.radius) || first.radius <= 0 || second.radius <= 0) {
-    return scene;
-  }
-
-  const firstChanged = idsIntersect([circleIds[0], ...circleConstraintPointIds(first)], changedSet);
-  const secondChanged = idsIntersect([circleIds[1], ...circleConstraintPointIds(second)], changedSet);
-  if (firstChanged && !secondChanged) return setCircleRadius(scene, first.id, second.radius);
-  return setCircleRadius(scene, second.id, first.radius);
-}
-
-function adjustSegmentLength(
-  scene: GeometryCalculatorScene,
-  pointIds: [string, string],
-  length: number,
-  changedSet: Set<string>,
-): GeometryCalculatorScene {
-  if (!Number.isFinite(length) || length <= 0) return scene;
-  const moveId = chooseEditablePointToMove(scene, pointIds, changedSet);
-  if (!moveId) return scene;
-  const anchorId = pointIds[0] === moveId ? pointIds[1] : pointIds[0];
-  const move = point2D(scene, moveId);
-  const anchor = point2D(scene, anchorId);
-  if (!move || !anchor) return scene;
-  const direction = normalizeVector({ x: move.x - anchor.x, y: move.y - anchor.y }) ?? { x: 1, y: 0 };
-  return setPointPosition(scene, moveId, {
-    x: anchor.x + direction.x * length,
-    y: anchor.y + direction.y * length,
-  });
-}
-
-function adjustLineDirection(
-  scene: GeometryCalculatorScene,
-  pointIds: [string, string],
-  direction: Vector2,
-  changedSet: Set<string>,
-): GeometryCalculatorScene {
-  const normalized = normalizeVector(direction);
-  if (!normalized) return scene;
-  const moveId = chooseEditablePointToMove(scene, pointIds, changedSet);
-  if (!moveId) return scene;
-  const anchorId = pointIds[0] === moveId ? pointIds[1] : pointIds[0];
-  const move = point2D(scene, moveId);
-  const anchor = point2D(scene, anchorId);
-  if (!move || !anchor) return scene;
-  const length = Math.max(distance2D(move, anchor), 1);
-  const currentDirection = normalizeVector({ x: move.x - anchor.x, y: move.y - anchor.y });
-  const sign = currentDirection && dot(currentDirection, normalized) < 0 ? -1 : 1;
-  return setPointPosition(scene, moveId, {
-    x: anchor.x + normalized.x * sign * length,
-    y: anchor.y + normalized.y * sign * length,
-  });
-}
-
-function setPointOnAngle(
-  scene: GeometryCalculatorScene,
-  options: {
-    moveId: string;
-    anchor: Vector2;
-    base: Vector2;
-    current: Vector2;
-    degrees: number;
-  },
-): GeometryCalculatorScene {
-  const baseDirection = normalizeVector({
-    x: options.base.x - options.anchor.x,
-    y: options.base.y - options.anchor.y,
-  });
-  if (!baseDirection) return scene;
-  const radius = Math.max(distance2D(options.current, options.anchor), 1);
-  const baseAngle = Math.atan2(baseDirection.y, baseDirection.x);
-  const target = ((options.degrees % 360) * Math.PI) / 180;
-  const currentAngle = Math.atan2(options.current.y - options.anchor.y, options.current.x - options.anchor.x);
-  const first = baseAngle + target;
-  const second = baseAngle - target;
-  const angle = angularDistance(currentAngle, first) <= angularDistance(currentAngle, second) ? first : second;
-  return setPointPosition(scene, options.moveId, {
-    x: options.anchor.x + Math.cos(angle) * radius,
-    y: options.anchor.y + Math.sin(angle) * radius,
-  });
-}
-
-function setCircleRadius(
-  scene: GeometryCalculatorScene,
-  circleId: string,
-  radius: number,
-): GeometryCalculatorScene {
-  if (!Number.isFinite(radius) || radius <= 0) return scene;
-  const circle = scene.entities[circleId];
-  if (circle?.kind !== 'circle' || circle.locked) return scene;
-
-  if (circle.construction?.kind === 'circleCenterPoint') {
-    const center = point2D(scene, circle.construction.centerPointId);
-    const radiusPoint = point2D(scene, circle.construction.radiusPointId);
-    if (!center || !radiusPoint || radiusPoint.locked) return scene;
-    const direction = normalizeVector({ x: radiusPoint.x - center.x, y: radiusPoint.y - center.y }) ?? { x: 1, y: 0 };
-    return setPointPosition(scene, radiusPoint.id, {
-      x: center.x + direction.x * radius,
-      y: center.y + direction.y * radius,
-    });
-  }
-
-  if (circle.construction?.kind === 'circleThroughPoints') return scene;
-  if (Math.abs(circle.radius - radius) <= 1e-9) return scene;
-  return {
-    ...scene,
-    entities: {
-      ...scene.entities,
-      [circle.id]: { ...circle, radius },
-    },
-  };
-}
-
-function setPointPosition(
-  scene: GeometryCalculatorScene,
-  pointId: string,
-  position: Vector2,
-): GeometryCalculatorScene {
-  const point = point2D(scene, pointId);
-  if (!point || point.locked || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return scene;
-  if (Math.abs(point.x - position.x) <= 1e-9 && Math.abs(point.y - position.y) <= 1e-9) return scene;
-  return {
-    ...scene,
-    points: {
-      ...scene.points,
-      [point.id]: { ...point, x: position.x, y: position.y },
-    },
-  };
-}
-
-function chooseEditablePointToMove(
-  scene: GeometryCalculatorScene,
-  pointIds: [string, string],
-  changedSet: Set<string>,
-): string | null {
-  const changed = pointIds.filter(pointId => changedSet.has(pointId) && isEditablePoint(scene, pointId));
-  if (changed.length > 0) return changed[changed.length - 1] ?? null;
-  if (isEditablePoint(scene, pointIds[1])) return pointIds[1];
-  if (isEditablePoint(scene, pointIds[0])) return pointIds[0];
-  return null;
-}
-
-function isEditablePoint(scene: GeometryCalculatorScene, pointId: string): boolean {
-  const point = point2D(scene, pointId);
-  return Boolean(point && !point.locked);
-}
-
-function lineConstraintPointIds(scene: GeometryCalculatorScene, entityId: string): [string, string] | null {
-  const entity = scene.entities[entityId];
-  if (!entity) return null;
-  if (
-    entity.kind === 'segment'
-    || entity.kind === 'line'
-    || entity.kind === 'ray'
-    || entity.kind === 'vector'
-  ) {
-    return entity.pointIds;
-  }
-  return null;
-}
-
-function segmentLength(scene: GeometryCalculatorScene, pointIds: [string, string]): number {
-  const first = point2D(scene, pointIds[0]);
-  const second = point2D(scene, pointIds[1]);
-  return first && second ? distance2D(first, second) : NaN;
-}
-
-function segmentDirection(scene: GeometryCalculatorScene, pointIds: [string, string]): Vector2 | null {
-  const first = point2D(scene, pointIds[0]);
-  const second = point2D(scene, pointIds[1]);
-  return first && second ? normalizeVector({ x: second.x - first.x, y: second.y - first.y }) : null;
-}
-
-function circleConstraintPointIds(circle: CircleEntity): string[] {
-  const ids = [circle.centerId];
-  if (circle.construction?.kind === 'circleCenterPoint') ids.push(circle.construction.radiusPointId);
-  if (circle.construction?.kind === 'circleThroughPoints') ids.push(...circle.construction.pointIds);
-  return ids;
-}
-
-function idsIntersect(ids: Iterable<string>, changedSet: Set<string>): boolean {
-  for (const id of ids) {
-    if (changedSet.has(id)) return true;
-  }
-  return false;
-}
-
 function changedIdsFromDeltas(deltas: GeometryCalculatorDelta[]): string[] {
   const ids = new Set<string>();
   for (const delta of deltas) {
@@ -7296,43 +6976,6 @@ function helperPointsForEquation(
     { id: ids.next('p'), kind: 'point2d', x: first.x, y: first.y, color, hidden: true, locked: true },
     { id: ids.next('p'), kind: 'point2d', x: second.x, y: second.y, color, hidden: true, locked: true },
   ];
-}
-
-function helperPointForLineEquation(
-  equation: GeometryLineEquation,
-  through: GeometryPoint2D,
-  ids: ReturnType<typeof createIdFactory>,
-  color: string,
-): GeometryPoint2D {
-  const direction = normalizeVector({ x: equation.b, y: -equation.a }) ?? { x: 1, y: 0 };
-  return {
-    id: ids.next('p'),
-    kind: 'point2d',
-    x: through.x + direction.x,
-    y: through.y + direction.y,
-    color,
-    hidden: true,
-    locked: true,
-  };
-}
-
-function constructedLineEquation(
-  constructionKind: 'parallelLine' | 'perpendicularLine',
-  source: GeometryLineEquation,
-  through: Vector2,
-): GeometryLineEquation {
-  if (constructionKind === 'parallelLine') {
-    return normalizeLineEquation({
-      a: source.a,
-      b: source.b,
-      c: -(source.a * through.x + source.b * through.y),
-    });
-  }
-  return normalizeLineEquation({
-    a: -source.b,
-    b: source.a,
-    c: -((-source.b) * through.x + source.a * through.y),
-  });
 }
 
 function solveLineY(equation: GeometryLineEquation, x: number): number {
@@ -8377,27 +8020,6 @@ function appendSvgGrid(
   return lines.join('');
 }
 
-async function svgToPngBlob(svg: string, size: { width: number; height: number }): Promise<Blob> {
-  if (typeof document === 'undefined' || typeof Image === 'undefined') {
-    throw new KleinSdkError('unsupported_export', 'PNG export requires a browser canvas environment.');
-  }
-  const canvas = document.createElement('canvas');
-  canvas.width = size.width;
-  canvas.height = size.height;
-  const context = canvas.getContext('2d');
-  if (!context) throw new KleinSdkError('export_failed', 'Canvas context could not be created.');
-  const image = new Image();
-  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  await new Promise<void>((resolve, reject) => {
-    image.onload = () => resolve();
-    image.onerror = () => reject(new KleinSdkError('export_failed', 'SVG rasterization failed.'));
-    image.src = url;
-  });
-  context.drawImage(image, 0, 0, size.width, size.height);
-  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
-  if (!blob) throw new KleinSdkError('export_failed', 'Canvas PNG export failed.');
-  return blob;
-}
 
 function geometrySceneToPdfBlob(
   snapshot: GeometryCalculatorSnapshot,
@@ -8549,26 +8171,6 @@ function geometrySceneToPdfStream(
   return commands.filter(Boolean).join('\n');
 }
 
-function pdfDocument(stream: string, size: { width: number; height: number }): string {
-  const objects = [
-    '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
-    '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
-    `3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 ${size.width} ${size.height}] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj`,
-    '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
-    `5 0 obj << /Length ${stream.length} >> stream\n${stream}\nendstream endobj`,
-  ];
-  let pdf = '%PDF-1.4\n';
-  const offsets = [0];
-  for (const object of objects) {
-    offsets.push(pdf.length);
-    pdf += `${object}\n`;
-  }
-  const xref = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const offset of offsets.slice(1)) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
-  pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return pdf;
-}
 
 function pdfGrid(
   bounds: WorldBounds,
@@ -8716,20 +8318,6 @@ function pdfArc(
   );
 }
 
-function pdfText(
-  text: string,
-  screenPoint: Vector2,
-  color: string,
-  size: { width: number; height: number },
-  fontSize = 12,
-): string {
-  return [
-    'q',
-    pdfFillColor(color),
-    `BT /F1 ${pdfNumber(fontSize)} Tf ${pdfNumber(screenPoint.x)} ${pdfNumber(size.height - screenPoint.y)} Td (${escapePdfText(text)}) Tj ET`,
-    'Q',
-  ].join('\n');
-}
 
 function pdfPoint(
   point: Vector2,
@@ -8741,61 +8329,11 @@ function pdfPoint(
   return { x: screen.x, y: size.height - screen.y };
 }
 
-function pdfStrokeColor(color: string): string {
-  const rgb = parsePdfColor(color, false);
-  return `${pdfNumber(rgb.r)} ${pdfNumber(rgb.g)} ${pdfNumber(rgb.b)} RG`;
-}
 
-function pdfFillColor(color: string): string {
-  const rgb = parsePdfColor(color, true);
-  return `${pdfNumber(rgb.r)} ${pdfNumber(rgb.g)} ${pdfNumber(rgb.b)} rg`;
-}
 
-function parsePdfColor(color: string, blendAlpha: boolean): { r: number; g: number; b: number } {
-  const trimmed = color.trim();
-  const hex = trimmed.match(/^#(?<hex>[0-9a-f]{6})(?<alpha>[0-9a-f]{2})?$/i);
-  if (hex?.groups) {
-    const raw = hex.groups.hex ?? '2563eb';
-    const alpha = hex.groups.alpha ? Number.parseInt(hex.groups.alpha, 16) / 255 : 1;
-    return normalizePdfColor(
-      Number.parseInt(raw.slice(0, 2), 16),
-      Number.parseInt(raw.slice(2, 4), 16),
-      Number.parseInt(raw.slice(4, 6), 16),
-      blendAlpha ? alpha : 1,
-    );
-  }
-  const rgba = trimmed.match(/^rgba?\((?<r>[\d.]+),\s*(?<g>[\d.]+),\s*(?<b>[\d.]+)(?:,\s*(?<a>[\d.]+))?\)$/i);
-  if (rgba?.groups) {
-    return normalizePdfColor(
-      Number(rgba.groups.r),
-      Number(rgba.groups.g),
-      Number(rgba.groups.b),
-      blendAlpha ? Number(rgba.groups.a ?? 1) : 1,
-    );
-  }
-  return normalizePdfColor(37, 99, 235, 1);
-}
 
-function normalizePdfColor(r: number, g: number, b: number, alpha: number): { r: number; g: number; b: number } {
-  const a = clamp(alpha, 0, 1);
-  return {
-    r: clamp((r * a + 255 * (1 - a)) / 255, 0, 1),
-    g: clamp((g * a + 255 * (1 - a)) / 255, 0, 1),
-    b: clamp((b * a + 255 * (1 - a)) / 255, 0, 1),
-  };
-}
 
-function escapePdfText(value: string): string {
-  return value
-    .replace(/[^\x20-\x7E]/g, '?')
-    .replace(/[()\\]/g, match => `\\${match}`)
-    .replace(/\r?\n/g, ' ');
-}
 
-function pdfNumber(value: number): string {
-  if (!Number.isFinite(value)) return '0';
-  return Number(value.toFixed(4)).toString();
-}
 
 function geometrySceneToSvg(
   snapshot: GeometryCalculatorSnapshot,

@@ -1,5 +1,17 @@
 /** Framework-independent Geometry Lab instrument and factory implementation. */
 import { createInstrumentRuntime, KleinSdkError } from '../core/index.js';
+import { svgToPngBlob } from '../export/index.js';
+import { DEFAULT_TRACE_CAPACITY, GeometryTrace } from './trace.js';
+import { foldSolidNet, unfoldSolidNet } from './nets.js';
+import type { FoldedFace3D } from './nets.js';
+import {
+  compileImplicitSurface3D,
+  isosurfaceEvaluationCount,
+  marchIsosurface3D,
+} from './implicit-surfaces.js';
+import { attachGeometryLabPointer } from './interaction.js';
+import type { GeometryPointerAttachment, GeometryPointerOptions } from './interaction.js';
+import type { GeometrySliderDraft2D, ImplicitSurfaceInput3D } from './types.js';
 import type {
   ApplyDeltaOptions,
   Camera3DState,
@@ -11,25 +23,51 @@ import type {
   JsonValue,
   KleinToolRuntime,
   LoadOptions,
+  Vector2,
   Vector3,
 } from '../core/index.js';
 import {
+  MAX_LOCUS_SAMPLES,
+  geometryPointOnPath2D,
+  buildAngleBisector2D,
+  buildTransformedObject2D,
+  geometryTransform2DSourceIds,
+  geometryConstraintDependencies,
+  buildCircleByCenterPoint2D,
+  buildCircleThroughPoints2D,
+  buildConstructedLine2D,
+  buildIntersection2D,
+  buildLineThroughPoints2D,
+  buildMidpoint2D,
   normalizeGeometryPlaneEquation3D,
   planeEquationFrom3DPoints,
 } from '../geometry-core/index.js';
 import type {
+  AngleEntity,
+  GeometryConstraint,
+  GeometrySlider,
+  LocusEntity,
+  GeometryConstruction,
+  GeometryConstructionResult,
+  GeometryEntity,
   GeometryLine3D,
   GeometryPlaneEquation3D,
+  GeometryPoint2D,
+  GeometryTransform2D,
   GeometryPoint3D,
   LineEntity,
   PlaneEntity,
+  PolygonEntity,
+  RayEntity,
   SegmentEntity,
+  VectorEntity,
 } from '../geometry-core/index.js';
 import type {
   CrossSectionEntity,
   CurveEntity3D,
   EquationSurfaceInput3D,
   GeometryCameraPreset3D,
+  GeometryConstraintDraft2D,
   GeometryEntity3D,
   GeometryLab,
   GeometryLabAppState,
@@ -41,7 +79,10 @@ import type {
   GeometryPolyhedronKind,
   GeometryScene3D,
   GeometrySelection,
+  Measurement2D,
   Measurement3D,
+  MeasurementSource2D,
+  MeasurementSource3D,
   ParametricCurve3DInput,
   SolidCreationOptions,
   SolidEntity,
@@ -63,7 +104,13 @@ import {
   geometryLabHistoryDelta,
   type GeometryLabHistoryEntry,
 } from './history.js';
-import { renderGeometryLabSvg3D } from './renderers.js';
+import {
+  renderGeometryLabLatex,
+  renderGeometryLabPdf,
+  renderGeometryLabSvg2D,
+  renderGeometryLabSvg3D,
+  rendersTwoDimensionalScene,
+} from './renderers.js';
 import {
   assertGeometryLabDeltaComplexity,
   assertGeometryLabExportOutputComplexity,
@@ -105,8 +152,65 @@ import {
 } from './solids.js';
 
 export { assertGeometryLabInvariants, getGeometryLabInvariantIssues } from './invariants.js';
+import { computeGeometryInvariants } from './gradable-invariants.js';
+import type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
+import { checkGeometryGoal } from './goal-check.js';
+import type { GeometryGoalCheck } from './goal-check.js';
+import { detectGeometryConjectures } from './conjectures.js';
+import type { GeometryConjectureOptions, GeometryConjectureReport } from './conjectures.js';
+import { markGeometryExercise, nextGeometryHint } from './exercises.js';
+import type { GeometryExercise, GeometryExerciseHint, GeometryExerciseMark } from './exercises.js';
+import { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
+import type { GeometryConstructionProtocol } from './protocol.js';
+import { describeGeometryLabFigure, geometryLabFigureSummary } from './describe.js';
+
 export { computeGeometryInvariants, RELATIVE_TOLERANCE } from './gradable-invariants.js';
 export type { GeometryInvariantId, GeometryInvariantReport } from './gradable-invariants.js';
+export { checkGeometryGoal } from './goal-check.js';
+export type { GeometryGoalCheck } from './goal-check.js';
+export { detectGeometryConjectures } from './conjectures.js';
+export type { GeometryConjectureOptions, GeometryConjectureReport } from './conjectures.js';
+export {
+  geometryExerciseProgress,
+  learnerGeometryExercise,
+  markGeometryExercise,
+  nextGeometryHint,
+} from './exercises.js';
+export type {
+  GeometryExercise,
+  GeometryExerciseAttempt,
+  GeometryExerciseCriterion,
+  GeometryExerciseCriterionResult,
+  GeometryExerciseHint,
+  GeometryExerciseLevel,
+  GeometryExerciseMark,
+  GeometryExerciseProgress,
+  GeometryExerciseTask,
+} from './exercises.js';
+export { GEOMETRY_EXERCISE_BANK, geometryExercise } from './exercise-bank.js';
+export {
+  describeGeometryInvariant,
+  describeGeometryLabFigure,
+  geometryLabFigureSummary,
+} from './describe.js';
+export {
+  GEOMETRY_TOOL_KEYS,
+  KEYBOARD_COMPLETABLE_TOOLS,
+  createGeometryKeyboardSession,
+} from './keyboard.js';
+export type {
+  GeometryKeyModifiers,
+  GeometryKeyPress,
+  GeometryKeyboardOptions,
+  GeometryKeyboardSession,
+  GeometryKeyboardState,
+} from './keyboard.js';
+export { formatGeometryConstructionProtocol, geometryConstructionProtocol } from './protocol.js';
+export type {
+  GeometryConstructionProtocol,
+  GeometryProtocolStep,
+  GeometryProtocolStepKind,
+} from './protocol.js';
 export { compactGeometryLabDelta, compactGeometryLabSnapshot } from './persistence.js';
 export { compileEquationSurface3D } from './equations.js';
 export {
@@ -121,7 +225,27 @@ export {
   validateGeometryLabSnapshot,
 } from './validation.js';
 export { validateGeometryLabCommand } from './commands.js';
-export { renderGeometryLabSvg3D } from './renderers.js';
+export { DEFAULT_TRACE_CAPACITY, GeometryTrace } from './trace.js';
+export { foldSolidNet, unfoldSolidNet } from './nets.js';
+export type { FoldedFace3D, NetFacePlacement, UnfoldedNet } from './nets.js';
+export {
+  compileImplicitSurface3D,
+  isosurfaceEvaluationCount,
+  isosurfaceResolutionWithin,
+  marchIsosurface3D,
+} from './implicit-surfaces.js';
+export type { Isosurface3D, IsosurfaceInput3D, ScalarField3D } from './implicit-surfaces.js';
+export { attachGeometryLabPointer } from './interaction.js';
+export type { GeometryPointerAttachment, GeometryPointerOptions } from './interaction.js';
+export { DEFAULT_PICK_RADIUS, GeometryHitIndex } from './hit-test.js';
+export type { GeometryHit } from './hit-test.js';
+export {
+  geometryLabFigureGeometry,
+  renderGeometryLabLatex,
+  renderGeometryLabPdf,
+  renderGeometryLabSvg2D,
+  renderGeometryLabSvg3D,
+} from './renderers.js';
 export {
   assertGeometryLabDeltaComplexity,
   assertGeometryLabCommandComplexity,
@@ -254,6 +378,16 @@ export type GeometryLabOptions = InstrumentOptions<GeometryLabSnapshot, Geometry
   historyByteLimit?: number;
   /** Optional resource-budget overrides for snapshots, deltas, sampling, exports, and history. */
   complexityLimits?: Partial<GeometryLabComplexityLimits>;
+  /**
+   * Whether a mounted figure responds to a pointer and a keyboard.
+   *
+   * <p>Off by default, and that is about not surprising the hosts that already
+   * have their own layer rather than about doubting this one: a second set of
+   * listeners on the same element would handle every click twice. A host with
+   * nothing of its own asks for it here and gets a usable tool; one with its own
+   * layer keeps it, and can still reach `attachGeometryLabPointer` directly.
+   */
+  interactive?: boolean | GeometryPointerOptions;
 };
 
 const GEOMETRY_LAB_TOOLS: ReadonlySet<string> = new Set([
@@ -380,6 +514,9 @@ class GeometryLabInstrument implements GeometryLab {
   #options: Pick<GeometryLabOptions, 'readOnly' | 'onDelta' | 'onError'>;
   #deltaListeners = new Set<(delta: GeometryLabDelta, meta: DeltaMeta) => void>();
   #root: HTMLElement | undefined;
+  #pointer: GeometryPointerAttachment | undefined;
+  readonly #traces = new Map<string, GeometryTrace>();
+  readonly #interactive: boolean | GeometryPointerOptions;
   #undoStack: GeometryLabHistoryEntry[] = [];
   #redoStack: GeometryLabHistoryEntry[] = [];
   #historyLimit: number;
@@ -395,7 +532,7 @@ class GeometryLabInstrument implements GeometryLab {
     if (unsupportedOption !== undefined) {
       throw new KleinSdkError(
         'unsupported_geometry_lab_option',
-        `Geometry Lab option "${unsupportedOption}" is not supported. Renderer selection and editor snapping are host-owned.`,
+        `Geometry Lab option "${unsupportedOption}" is not supported. Renderer selection is host-owned; snapping is a setting on "interactive".`,
       );
     }
     if (options.initialView !== undefined && !GEOMETRY_LAB_ACTIVE_VIEWS.has(options.initialView)) {
@@ -404,6 +541,7 @@ class GeometryLabInstrument implements GeometryLab {
         `Unsupported Geometry Lab initialView "${String(options.initialView)}". Use "2d", "3d", or "split".`,
       );
     }
+    this.#interactive = options.interactive ?? false;
     this.#complexityLimits = resolveGeometryLabComplexityLimits(options.complexityLimits);
     this.actorId = geometryLabActorId(options.actorId, this.#complexityLimits.maxIdChars);
     this.#ids = createGeometryLabIdFactory(this.actorId);
@@ -479,15 +617,172 @@ class GeometryLabInstrument implements GeometryLab {
       this.destroy();
       throw error;
     }
+    if (this.#interactive !== false) {
+      this.#pointer = attachGeometryLabPointer(
+        this,
+        root,
+        this.#interactive === true ? {} : this.#interactive,
+      );
+    }
   }
 
   destroy(): void {
+    this.#pointer?.detach();
+    this.#pointer = undefined;
     this.#root?.remove();
     this.#root = undefined;
   }
 
+  /** The pointer and keyboard session on the mounted figure, if there is one. */
+  get interaction(): GeometryPointerAttachment | undefined {
+    return this.#pointer;
+  }
+
+  /**
+   * An isolated, mutable copy of the current snapshot. Writing into what this
+   * returns never affects the instrument, and that is a tested guarantee.
+   */
   getSnapshot(): GeometryLabSnapshot {
     return cloneSnapshot(this.#snapshot);
+  }
+
+  /**
+   * The current snapshot without copying it, for callers that only read.
+   *
+   * <p>{@link getSnapshot} deep-clones through
+   * `JSON.parse(JSON.stringify(...))`: 0.5 ms on a 500-point scene, and 11.7 ms
+   * and 6.7 MB on one holding four sampled surfaces. A host redrawing from
+   * state pays that per frame, for isolation it does not use.
+   *
+   * <p>Sharing is safe on this side - the reducer is copy-on-write and the
+   * instrument only ever replaces the whole snapshot, never writes into one -
+   * so the only hazard is a caller writing into what it receives. The
+   * containers are frozen so that fails loudly rather than silently corrupting
+   * instrument state: adding, replacing or deleting a record throws. Writing
+   * into an individual point or entity is *not* caught, because deep-freezing
+   * the surface scene above costs 30 ms, which would defeat the purpose.
+   *
+   * <p>So: read from this, and if you need to write, use {@link getSnapshot}.
+   */
+  peekSnapshot(): Readonly<GeometryLabSnapshot> {
+    return freezeGeometryLabSnapshotShell(this.#snapshot);
+  }
+
+  /** What the figure establishes, as facts a mark scheme can name. */
+  getInvariants(): GeometryInvariantReport {
+    return computeGeometryInvariants(this.#snapshot);
+  }
+
+  /**
+   * Checks the figure against the facts it was asked to establish, and says
+   * which of them are absent - which is the half a hint is built from.
+   */
+  checkGoal(targetInvariants: readonly GeometryInvariantId[]): GeometryGoalCheck {
+    return checkGeometryGoal(this.#snapshot, targetInvariants, this.getInvariants());
+  }
+
+  /** Marks the figure against an exercise, key and rubric included. */
+  markExercise(exercise: GeometryExercise): GeometryExerciseMark {
+    return markGeometryExercise(exercise, this.#snapshot);
+  }
+
+  /**
+   * The next thing to say to a student who is stuck on this exercise, chosen
+   * from what their figure is actually missing.
+   */
+  nextHint(exercise: GeometryExercise, released: readonly string[] = []): GeometryExerciseHint | null {
+    return nextGeometryHint(exercise, this.#snapshot, released);
+  }
+
+  /**
+   * Which of the figure's facts are true of the construction rather than of
+   * this configuration of it.
+   *
+   * <p>Costs several recomputations of the whole figure, so it belongs where a
+   * marker asks a question - an idle callback, a worker, a "check" button -
+   * and never in a drag.
+   */
+  detectConjectures(options: GeometryConjectureOptions = {}): GeometryConjectureReport {
+    return detectGeometryConjectures(this.#snapshot, options);
+  }
+
+  /**
+   * How the figure was built, derived from the provenance it already carries.
+   *
+   * <p>A protocol of the figure as it stands rather than a log of what was done
+   * to it, so it cannot go stale and costs nothing until it is asked for.
+   */
+  getConstructionProtocol(): GeometryConstructionProtocol {
+    return geometryConstructionProtocol(this.#snapshot);
+  }
+
+  /** The protocol as numbered lines, which is how one is read on paper. */
+  formatConstructionProtocol(): string {
+    return formatGeometryConstructionProtocol(this.getConstructionProtocol());
+  }
+
+  /**
+   * Starts keeping a record of where a point goes.
+   *
+   * <p>Kept on the instrument rather than in the document: a trace is what this
+   * session did, not a property of the figure, and putting it in the snapshot
+   * would send it through undo, the history diff and every collaborative
+   * message for something nobody opening the file later would want.
+   */
+  startTrace2D(pointId: string, capacity: number = DEFAULT_TRACE_CAPACITY): void {
+    this.#require2DPoint(pointId);
+    const point = this.#snapshot.scene.scene2d.points[pointId] as GeometryPoint2D;
+    const trace = new GeometryTrace(capacity);
+    trace.record({ x: point.x, y: point.y });
+    this.#traces.set(pointId, trace);
+  }
+
+  /** Stops recording, and forgets what was recorded. */
+  stopTrace2D(pointId: string): void {
+    this.#traces.delete(pointId);
+  }
+
+  /** Where the point has been, oldest first, or nothing if it is not traced. */
+  getTrace2D(pointId: string): GeometryTrace | undefined {
+    return this.#traces.get(pointId);
+  }
+
+  /** Every point being traced. */
+  tracedPointIds(): string[] {
+    return [...this.#traces.keys()].sort();
+  }
+
+  /**
+   * Adds each traced point's new position, once per commit.
+   *
+   * <p>Per commit rather than per frame, because a commit is what a change is:
+   * a drag that moves nothing records nothing, and the ring drops a repeat of
+   * the position it already holds.
+   */
+  #recordTraces(): void {
+    if (this.#traces.size === 0) return;
+    const points = this.#snapshot.scene.scene2d.points;
+    for (const [id, trace] of this.#traces) {
+      const point = points[id];
+      // A traced point that has been deleted stops being traced, rather than
+      // keeping a buffer nothing will ever write to again.
+      if (!point || point.kind !== 'point2d') { this.#traces.delete(id); continue; }
+      trace.record({ x: point.x, y: point.y });
+    }
+  }
+
+  /**
+   * The figure in words: what it holds, how it was built, what it establishes
+   * and what has been measured. The same text `export({ format: 'text' })`
+   * produces.
+   */
+  describe(): string {
+    return describeGeometryLabFigure(this.#snapshot);
+  }
+
+  /** One sentence naming what the figure holds. */
+  summarize(): string {
+    return geometryLabFigureSummary(this.#snapshot);
   }
 
   subscribeDelta(listener: (delta: GeometryLabDelta, meta: DeltaMeta) => void): () => void {
@@ -526,6 +821,9 @@ class GeometryLabInstrument implements GeometryLab {
       throw sdkError;
     }
     this.#snapshot = next;
+    // A different document is a different figure, so what the last one's points
+    // did is not this one's history.
+    for (const trace of this.#traces.values()) trace.clear();
     this.#undoStack = [];
     this.#redoStack = [];
     this.#historyBytes = 0;
@@ -630,7 +928,9 @@ class GeometryLabInstrument implements GeometryLab {
       };
     }
     if (options.format === 'svg') {
-      const data = renderGeometryLabSvg3D(this.#snapshot, options, this.#complexityLimits);
+      const data = rendersTwoDimensionalScene(this.#snapshot)
+        ? renderGeometryLabSvg2D(this.#snapshot, options, this.#complexityLimits)
+        : renderGeometryLabSvg3D(this.#snapshot, options, this.#complexityLimits);
       assertGeometryLabExportOutputComplexity(data, this.#complexityLimits);
       return {
         format: 'svg',
@@ -638,8 +938,32 @@ class GeometryLabInstrument implements GeometryLab {
         data,
       };
     }
+    if (options.format === 'png' || options.format === 'thumbnail') {
+      // Rasterized from the SVG rather than drawn again: a PNG that did not
+      // match the SVG would be two pictures of one figure. Browser-only, and
+      // the failure says so rather than producing an empty image.
+      const width = Math.max(1, Math.round(options.width ?? (options.format === 'thumbnail' ? 320 : 640)));
+      const height = Math.max(1, Math.round(options.height ?? (options.format === 'thumbnail' ? 200 : 480)));
+      const svg = rendersTwoDimensionalScene(this.#snapshot)
+        ? renderGeometryLabSvg2D(this.#snapshot, { ...options, width, height }, this.#complexityLimits)
+        : renderGeometryLabSvg3D(this.#snapshot, { ...options, width, height }, this.#complexityLimits);
+      const data = await svgToPngBlob(svg, { width, height });
+      return { format: options.format, mimeType: 'image/png', data } as ExportResult;
+    }
+    if (options.format === 'pdf') {
+      const data = renderGeometryLabPdf(this.#snapshot, options, this.#complexityLimits);
+      return {
+        format: 'pdf',
+        mimeType: 'application/pdf',
+        data: new Blob([data], { type: 'application/pdf' }),
+      };
+    }
+    if (options.format === 'latex') {
+      const data = renderGeometryLabLatex(this.#snapshot, options, this.#complexityLimits);
+      return { format: 'latex', mimeType: 'application/x-latex', data };
+    }
     if (options.format === 'text') {
-      const data = geometryLabSummaryText(this.#snapshot);
+      const data = describeGeometryLabFigure(this.#snapshot);
       assertGeometryLabExportOutputComplexity(data, this.#complexityLimits);
       return {
         format: 'text',
@@ -648,7 +972,274 @@ class GeometryLabInstrument implements GeometryLab {
       };
     }
 
-    throw new KleinSdkError('unsupported_export', 'Geometry Lab currently supports JSON, SVG, and text exports.');
+    throw new KleinSdkError(
+      'unsupported_export',
+      `Geometry Lab does not support ${options.format} export yet.`,
+    );
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 2D construction                                                        */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+   * The Lab declares 2D tools - point, segment, polygon, circle, angle,
+   * midpoint, perpendicular, parallel, bisector - and until now offered no way
+   * to use any of them: every method on the instrument was 3D, so a host had to
+   * hand-assemble raw `addPoint2D` and `addEntity2D` deltas and get the
+   * construction metadata right itself.
+   *
+   * <p>The geometry behind these lives in geometry-core and is shared with the
+   * Geometry Calculator, so the two instruments cannot drift about what a
+   * perpendicular is. What stays here is what is genuinely local: id prefixes,
+   * the Lab's delta shape, and its error codes.
+   */
+  addPoint2D(point: Vector2 & GeometryLabStyleOptions): string {
+    this.#assertWritable();
+    const created: GeometryPoint2D = {
+      id: this.#ids.next('p2'),
+      kind: 'point2d',
+      x: finiteNumber(point.x, 'Point x'),
+      y: finiteNumber(point.y, 'Point y'),
+    };
+    if (point.label !== undefined) created.label = point.label;
+    if (point.color !== undefined) created.color = point.color;
+    if (point.hidden !== undefined) created.hidden = point.hidden;
+    if (point.locked !== undefined) created.locked = point.locked;
+    this.#commitDelta({ op: 'addPoint2D', point: created });
+    return created.id;
+  }
+
+  addSegment2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addLinear2D('segment', 'seg2', firstPointId, secondPointId, style);
+  }
+
+  addRay2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addLinear2D('ray', 'ray2', firstPointId, secondPointId, style);
+  }
+
+  addVector2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addLinear2D('vector', 'vec2', firstPointId, secondPointId, style);
+  }
+
+  addLine2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildLineThroughPoints2D(
+        this.#snapshot.scene.scene2d,
+        this.#require2DPoint(firstPointId),
+        this.#require2DPoint(secondPointId),
+        (prefix: string) => this.#ids.next(prefix),
+      ),
+      style,
+      'invalid_line',
+      'A line needs two distinct 2D points.',
+    );
+  }
+
+  addPolygon2D(pointIds: string[], style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    this.#assertInputCount('Polygon points', pointIds.length, this.#complexityLimits.maxSolidFaceVertices);
+    if (pointIds.length < 3) {
+      throw new KleinSdkError('invalid_polygon', 'A polygon needs at least three 2D points.');
+    }
+    const resolved = pointIds.map(id => this.#require2DPoint(id));
+    if (new Set(resolved).size !== resolved.length) {
+      throw new KleinSdkError('invalid_polygon', 'A polygon cannot repeat a point.');
+    }
+    const entity = withEntity2DStyle<PolygonEntity>({
+      id: this.#ids.next('poly2'),
+      kind: 'polygon',
+      pointIds: resolved,
+    }, style);
+    this.#commitDelta({ op: 'addEntity2D', entity });
+    return entity.id;
+  }
+
+  addAngle2D(pointIds: [string, string, string], style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    const resolved = pointIds.map(id => this.#require2DPoint(id)) as [string, string, string];
+    if (resolved[0] === resolved[1] || resolved[1] === resolved[2]) {
+      throw new KleinSdkError('invalid_angle', 'An angle needs a vertex distinct from both arms.');
+    }
+    const entity = withEntity2DStyle<AngleEntity>({
+      id: this.#ids.next('ang2'),
+      kind: 'angle',
+      pointIds: resolved,
+    }, style);
+    this.#commitDelta({ op: 'addEntity2D', entity });
+    return entity.id;
+  }
+
+  addMidpoint2D(firstPointId: string, secondPointId: string, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildMidpoint2D(
+        this.#snapshot.scene.scene2d,
+        this.#require2DPoint(firstPointId),
+        this.#require2DPoint(secondPointId),
+        (prefix: string) => this.#ids.next(prefix),
+      ),
+      style,
+      'invalid_midpoint',
+      'A midpoint needs two distinct 2D points.',
+    );
+  }
+
+  addIntersection2D(
+    firstEntityId: string,
+    secondEntityId: string,
+    style: GeometryLabStyleOptions = {},
+    index = 0,
+  ): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildIntersection2D(
+        this.#snapshot.scene.scene2d,
+        this.#require2DEntity(firstEntityId),
+        this.#require2DEntity(secondEntityId),
+        (prefix: string) => this.#ids.next(prefix),
+        index,
+      ),
+      style,
+      'invalid_intersection',
+      'Those objects do not meet at that intersection.',
+    );
+  }
+
+  addParallelLine2D(sourceEntityId: string, throughPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addConstructedLine2D('parallelLine', sourceEntityId, throughPointId, style);
+  }
+
+  addPerpendicularLine2D(sourceEntityId: string, throughPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.#addConstructedLine2D('perpendicularLine', sourceEntityId, throughPointId, style);
+  }
+
+  addAngleBisector2D(pointIds: [string, string, string], style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    const resolved = pointIds.map(id => this.#require2DPoint(id)) as [string, string, string];
+    return this.#commit2DConstruction(
+      buildAngleBisector2D(this.#snapshot.scene.scene2d, resolved, (prefix: string) => this.#ids.next(prefix)),
+      style,
+      'invalid_bisector',
+      'That angle has no bisector.',
+    );
+  }
+
+  addCircle2D(centerPointId: string, radiusPointId: string, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildCircleByCenterPoint2D(
+        this.#snapshot.scene.scene2d,
+        this.#require2DPoint(centerPointId),
+        this.#require2DPoint(radiusPointId),
+        (prefix: string) => this.#ids.next(prefix),
+      ),
+      style,
+      'invalid_circle',
+      'A circle needs a centre and a distinct point on it.',
+    );
+  }
+
+  addCircleThroughPoints2D(pointIds: [string, string, string], style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    const resolved = pointIds.map(id => this.#require2DPoint(id)) as [string, string, string];
+    return this.#commit2DConstruction(
+      buildCircleThroughPoints2D(this.#snapshot.scene.scene2d, resolved, (prefix: string) => this.#ids.next(prefix)),
+      style,
+      'invalid_circle',
+      'Three collinear points do not define a circle.',
+    );
+  }
+
+  #addLinear2D(
+    kind: 'segment' | 'ray' | 'vector',
+    prefix: string,
+    firstPointId: string,
+    secondPointId: string,
+    style: GeometryLabStyleOptions,
+  ): string {
+    this.#assertWritable();
+    const first = this.#require2DPoint(firstPointId);
+    const second = this.#require2DPoint(secondPointId);
+    if (first === second) {
+      throw new KleinSdkError('invalid_segment', `A ${kind} needs two distinct 2D points.`);
+    }
+    const entity = withEntity2DStyle<SegmentEntity | RayEntity | VectorEntity>({
+      id: this.#ids.next(prefix),
+      kind,
+      pointIds: [first, second],
+    } as SegmentEntity | RayEntity | VectorEntity, style);
+    this.#commitDelta({ op: 'addEntity2D', entity });
+    return entity.id;
+  }
+
+  #addConstructedLine2D(
+    kind: 'parallelLine' | 'perpendicularLine',
+    sourceEntityId: string,
+    throughPointId: string,
+    style: GeometryLabStyleOptions,
+  ): string {
+    this.#assertWritable();
+    return this.#commit2DConstruction(
+      buildConstructedLine2D(
+        this.#snapshot.scene.scene2d,
+        kind,
+        this.#require2DEntity(sourceEntityId),
+        this.#require2DPoint(throughPointId),
+        (prefix: string) => this.#ids.next(prefix),
+      ),
+      style,
+      kind === 'parallelLine' ? 'invalid_parallel' : 'invalid_perpendicular',
+      'That source has no direction to build from.',
+    );
+  }
+
+  /**
+   * Commits a shared builder's records as one atomic Lab delta.
+   *
+   * <p>Style is applied only to the primary object: helper points are hidden
+   * scaffolding that hold a constructed line's direction, and colouring or
+   * labelling them would put furniture in the object list that no one asked
+   * for.
+   */
+  #commit2DConstruction(
+    result: GeometryConstructionResult | null,
+    style: GeometryLabStyleOptions,
+    failureCode: string,
+    failureMessage: string,
+  ): string {
+    if (!result) throw new KleinSdkError(failureCode, failureMessage);
+    const deltas: GeometryLabDelta[] = [
+      ...result.points.map(point => ({ op: 'addPoint2D' as const, point })),
+      ...result.entities.map(entity => ({
+        op: 'addEntity2D' as const,
+        entity: entity.id === result.primaryId ? withEntity2DStyle(entity, style) : entity,
+      })),
+    ];
+    // A construction whose primary object is a point still carries style.
+    const styled = deltas.map(delta => (
+      delta.op === 'addPoint2D' && delta.point.id === result.primaryId
+        ? { ...delta, point: withPoint2DStyle(delta.point, style) }
+        : delta
+    ));
+    this.#commitDelta({ op: 'batch', deltas: styled });
+    return result.primaryId;
+  }
+
+  #require2DPoint(id: string): string {
+    const point = this.#snapshot.scene.scene2d.points[id];
+    if (!point || point.kind !== 'point2d') {
+      throw new KleinSdkError('invalid_point_reference', `2D point "${id}" does not exist.`);
+    }
+    return id;
+  }
+
+  #require2DEntity(id: string): string {
+    if (!this.#snapshot.scene.scene2d.entities[id]) {
+      throw new KleinSdkError('invalid_entity_reference', `2D entity "${id}" does not exist.`);
+    }
+    return id;
   }
 
   addPoint3D(point: Vector3 & GeometryLabStyleOptions): string {
@@ -783,6 +1374,323 @@ class GeometryLabInstrument implements GeometryLab {
     return Math.abs(dot3(plane.normal, point) + plane.d);
   }
 
+  /**
+   * The measurements school solid geometry is actually about, beyond volume and
+   * surface area: how far apart two points are, how far a point is from a line,
+   * the angle a line makes with another line or with a plane, and the distance
+   * between two lines that never meet.
+   *
+   * <p>Each commits the *source* and lets canonicalization compute the value,
+   * exactly as the existing measurements do - which is what keeps them live
+   * when the geometry underneath them moves. The zero seeded here is replaced
+   * before the delta is ever visible.
+   */
+  addDistanceMeasurement3D(firstPointId: string, secondPointId: string, label = 'distance'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'pointPointDistance', firstPointId, secondPointId },
+      'length', 'u', firstPointId, [firstPointId, secondPointId], label,
+    );
+  }
+
+  addPointLineDistanceMeasurement(pointId: string, lineEntityId: string, label = 'point-line distance'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'pointLineDistance', pointId, lineEntityId },
+      'length', 'u', pointId, [pointId, lineEntityId], label,
+    );
+  }
+
+  addLineAngleMeasurement(firstLineId: string, secondLineId: string, label = 'angle'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'lineLineAngle', firstLineId, secondLineId },
+      'angle', 'deg', firstLineId, [firstLineId, secondLineId], label,
+    );
+  }
+
+  addLinePlaneAngleMeasurement(lineEntityId: string, planeId: string, label = 'line-plane angle'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'linePlaneAngle', lineEntityId, planeId },
+      'angle', 'deg', lineEntityId, [lineEntityId, planeId], label,
+    );
+  }
+
+  addLineDistanceMeasurement(firstLineId: string, secondLineId: string, label = 'line distance'): string {
+    return this.#addSourcedMeasurement(
+      { kind: 'lineLineDistance', firstLineId, secondLineId },
+      'length', 'u', firstLineId, [firstLineId, secondLineId], label,
+    );
+  }
+
+  #addSourcedMeasurement(
+    source: MeasurementSource3D,
+    kind: Measurement3D['kind'],
+    unit: Measurement3D['unit'],
+    targetId: string,
+    targetIds: string[],
+    label: string,
+  ): string {
+    this.#assertWritable();
+    const measurement: Measurement3D = {
+      id: this.#ids.next('m3'),
+      targetId,
+      targetIds,
+      kind,
+      // Canonicalization fills this in from the source during the commit, and
+      // rejects the delta if the geometry cannot support the measurement.
+      value: 0,
+      label,
+      source,
+    };
+    if (unit !== undefined) measurement.unit = unit;
+    this.#commitDelta({ op: 'addMeasurement', measurement });
+    return measurement.id;
+  }
+
+  /**
+   * Measurements over the 2D figure: segment length, distance between points,
+   * distance from a point to a line, angle size, and a polygon's area and
+   * perimeter. The Lab could construct all of these shapes and could not report
+   * a single number about them.
+   *
+   * <p>Like their 3D counterparts, these commit a source and let
+   * canonicalization compute the value, which is what keeps the number correct
+   * when the figure moves under it.
+   */
+  /**
+   * Constrains the 2D figure.
+   *
+   * <p>The Lab has been able to *store* constraints since the model was written
+   * - `scene2d.constraints` is validated, persisted and cascaded - and nothing
+   * ever enforced them, so a segment declared to be five units long could be
+   * dragged to any length at all. The solver is shared with the Geometry
+   * Calculator and runs during canonicalization, so a constraint holds however
+   * the figure is edited, not only through the method that set it.
+   */
+  /**
+   * Builds the image of a point or a vertex-defined entity under a plane
+   * transformation - translation, rotation, reflection in a line or in a point,
+   * and dilation.
+   *
+   * <p>`scale`, `rotate`, `stamp` and `cut` have been declared tools since the
+   * model was written, with nothing behind any of them, and the exercise bank
+   * asks students to mirror a figure by copying it across by hand.
+   *
+   * <p>The image is a *construction*, not a copy: each image vertex records its
+   * source and the transformation, so dragging the original moves the image, and
+   * dragging the mirror line sweeps the image around. That is the difference
+   * between a transformation tool and a one-off edit, and it is the whole reason
+   * to do this on a screen.
+   */
+  transform2D(targetId: string, transform: GeometryTransform2D, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    const scene = this.#snapshot.scene.scene2d;
+    if (!scene.points[targetId] && !scene.entities[targetId]) {
+      throw new KleinSdkError('invalid_transform_target', `2D object "${targetId}" does not exist.`);
+    }
+    for (const sourceId of geometryTransform2DSourceIds(transform)) {
+      if (!scene.points[sourceId] && !scene.entities[sourceId]) {
+        throw new KleinSdkError('invalid_transform_reference', `2D object "${sourceId}" does not exist.`);
+      }
+    }
+    return this.#commit2DConstruction(
+      buildTransformedObject2D(scene, targetId, transform, (prefix: string) => this.#ids.next(prefix)),
+      style,
+      'invalid_transform',
+      'That object cannot be transformed - a circle or a curve needs its own rule, and the transformation must be defined.',
+    );
+  }
+
+  translate2D(targetId: string, vectorEntityId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'translate', vectorEntityId }, style);
+  }
+
+  translateBy2D(targetId: string, dx: number, dy: number, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'translateBy', dx, dy }, style);
+  }
+
+  rotate2D(targetId: string, centerPointId: string, degrees: number, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'rotate', centerPointId, degrees }, style);
+  }
+
+  reflectInLine2D(targetId: string, lineEntityId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'reflectLine', lineEntityId }, style);
+  }
+
+  reflectInPoint2D(targetId: string, centerPointId: string, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'reflectPoint', centerPointId }, style);
+  }
+
+  dilate2D(targetId: string, centerPointId: string, factor: number, style: GeometryLabStyleOptions = {}): string {
+    return this.transform2D(targetId, { kind: 'dilate', centerPointId, factor }, style);
+  }
+
+  /**
+   * Adds a named number the figure can be built on.
+   *
+   * <p>The default range is nought to one, which is what a point placed along a
+   * path wants: a slider's value *is* the parameter rather than being rescaled
+   * into one, so the common case is the one that needs no arithmetic.
+   */
+  addSlider2D(slider: GeometrySliderDraft2D): string {
+    this.#assertWritable();
+    this.#assertInputString('Slider name', slider.name);
+    const min = slider.min ?? 0;
+    const max = slider.max ?? 1;
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max < min) {
+      throw new KleinSdkError('invalid_slider', 'A slider needs a finite range with its maximum at or above its minimum.');
+    }
+    const created: GeometrySlider = {
+      id: this.#ids.next('slider'),
+      name: slider.name,
+      value: Math.min(max, Math.max(min, slider.value ?? min)),
+      min,
+      max,
+      step: slider.step !== undefined && slider.step >= 0 ? slider.step : 0,
+    };
+    if (slider.label !== undefined) created.label = slider.label;
+    if (slider.color !== undefined) created.color = slider.color;
+    if (slider.hidden !== undefined) created.hidden = slider.hidden;
+    this.#commitDelta({ op: 'addSlider2D', slider: created });
+    return created.id;
+  }
+
+  /** Moves a slider, and with it everything built on it. */
+  setSliderValue2D(id: string, value: number): void {
+    this.#assertWritable();
+    if (!this.#snapshot.scene.scene2d.sliders?.[id]) {
+      throw new KleinSdkError('missing_slider', `Slider "${id}" does not exist.`);
+    }
+    this.#commitDelta({ op: 'updateSlider2D', id, changes: { value: finiteNumber(value, 'Slider value') } });
+  }
+
+  /**
+   * A point placed along an object rather than at a position.
+   *
+   * <p>With a slider it is the thing that sweeps, and so the thing a locus is
+   * traced by; without one it is a point pinned a fixed fraction of the way
+   * along something, which follows that object as it moves.
+   */
+  addPointOnPath2D(
+    entityId: string,
+    at: number | { sliderId: string },
+    style: GeometryLabStyleOptions = {},
+  ): string {
+    this.#assertWritable();
+    this.#require2DEntity(entityId);
+    const sliderId = typeof at === 'object' ? at.sliderId : undefined;
+    if (sliderId !== undefined && !this.#snapshot.scene.scene2d.sliders?.[sliderId]) {
+      throw new KleinSdkError('missing_slider', `Slider "${sliderId}" does not exist.`);
+    }
+    const construction: GeometryConstruction = sliderId === undefined
+      ? { kind: 'pointOnPath', entityId, at: finiteNumber(at as number, 'Path parameter') }
+      : { kind: 'pointOnPath', entityId, at: 0, sliderId };
+    const position = geometryPointOnPath2D(this.#snapshot.scene.scene2d, construction);
+    if (!position) {
+      throw new KleinSdkError('invalid_point_on_path', 'That object has no path a point can sit along.');
+    }
+    const created = withPoint2DStyle({
+      id: this.#ids.next('p2'),
+      kind: 'point2d',
+      x: position.x,
+      y: position.y,
+      locked: true,
+      construction,
+    }, style);
+    this.#commitDelta({ op: 'addPoint2D', point: created });
+    return created.id;
+  }
+
+  /**
+   * The path a point traces as a slider sweeps its whole range.
+   *
+   * <p>A construction rather than a list of coordinates: the curve follows the
+   * figure that generates it, which is the entire reason a locus is worth
+   * drawing on a screen rather than on paper.
+   */
+  addDynamicLocus2D(
+    sliderId: string,
+    tracerId: string,
+    options: GeometryLabStyleOptions & { samples?: number } = {},
+  ): string {
+    this.#assertWritable();
+    if (!this.#snapshot.scene.scene2d.sliders?.[sliderId]) {
+      throw new KleinSdkError('missing_slider', `Slider "${sliderId}" does not exist.`);
+    }
+    this.#require2DPoint(tracerId);
+    const samples = Math.max(2, Math.min(MAX_LOCUS_SAMPLES, Math.floor(options.samples ?? 64)));
+    const created = withEntity2DStyle<LocusEntity>({
+      id: this.#ids.next('locus'),
+      kind: 'locus',
+      points: [],
+      construction: { kind: 'dynamicLocus', sliderId, tracerId, samples },
+    }, options);
+    this.#commitDelta({ op: 'addEntity2D', entity: created });
+    return created.id;
+  }
+
+  addConstraint2D(constraint: GeometryConstraintDraft2D): string {
+    this.#assertWritable();
+    for (const id of geometryConstraintDependencies({ ...constraint, id: 'draft' } as GeometryConstraint)) {
+      if (!this.#snapshot.scene.scene2d.points[id] && !this.#snapshot.scene.scene2d.entities[id]) {
+        throw new KleinSdkError('invalid_constraint_reference', `2D object "${id}" does not exist.`);
+      }
+    }
+    const owned = { ...constraint, id: this.#ids.next('con2') } as GeometryConstraint;
+    this.#commitDelta({ op: 'addConstraint2D', constraint: owned });
+    return owned.id;
+  }
+
+  removeConstraint2D(ids: string | string[]): void {
+    this.#assertWritable();
+    const unique = [...new Set(typeof ids === 'string' ? [ids] : ids)].filter(Boolean);
+    if (!unique.length) return;
+    this.#commitDelta({ op: 'deleteConstraint2D', ids: unique });
+  }
+
+  addDistanceMeasurement2D(firstPointId: string, secondPointId: string, label = 'distance'): string {
+    return this.#addMeasurement2D({ kind: 'pointDistance', firstPointId, secondPointId }, 'length', 'u', label);
+  }
+
+  addLengthMeasurement2D(entityId: string, label = 'length'): string {
+    return this.#addMeasurement2D({ kind: 'segmentLength', entityId }, 'length', 'u', label);
+  }
+
+  addPointLineDistanceMeasurement2D(pointId: string, entityId: string, label = 'point-line distance'): string {
+    return this.#addMeasurement2D({ kind: 'pointLineDistance', pointId, entityId }, 'length', 'u', label);
+  }
+
+  addAngleMeasurement2D(pointIds: [string, string, string], label = 'angle'): string {
+    return this.#addMeasurement2D({ kind: 'angle', pointIds }, 'angle', 'deg', label);
+  }
+
+  addAreaMeasurement2D(polygonId: string, label = 'area'): string {
+    return this.#addMeasurement2D({ kind: 'polygonArea', entityId: polygonId }, 'area', 'u^2', label);
+  }
+
+  addPerimeterMeasurement2D(polygonId: string, label = 'perimeter'): string {
+    return this.#addMeasurement2D({ kind: 'polygonPerimeter', entityId: polygonId }, 'length', 'u', label);
+  }
+
+  #addMeasurement2D(
+    source: MeasurementSource2D,
+    kind: Measurement2D['kind'],
+    unit: Measurement2D['unit'],
+    label: string,
+  ): string {
+    this.#assertWritable();
+    const measurement: Measurement2D = {
+      id: this.#ids.next('m2'),
+      kind,
+      // Filled in by canonicalization during the commit, which also rejects the
+      // delta when the sources cannot support the measurement.
+      value: 0,
+      label,
+      source,
+    };
+    if (unit !== undefined) measurement.unit = unit;
+    this.#commitDelta({ op: 'addMeasurement2D', measurement });
+    return measurement.id;
+  }
+
   addPointPlaneDistanceMeasurement(pointId: string, planeId: string, label = 'point-plane distance'): string {
     this.#assertWritable();
     const measurement: Measurement3D = {
@@ -806,7 +1714,11 @@ class GeometryLabInstrument implements GeometryLab {
     const plane = this.#requirePlaneData(planeId);
     const point = intersectLinePlane(line, plane);
     if (!point) throw new KleinSdkError('parallel_line_plane', 'Line and plane do not intersect in a finite point.');
-    const created = this.#makePoint3D({ ...point, ...style });
+    const created = this.#makePoint3D({
+      ...point,
+      ...style,
+      construction: { kind: 'linePlaneIntersection', lineEntityId, planeId },
+    });
     this.#commitDelta({ op: 'addPoint3D', point: created });
     return created.id;
   }
@@ -817,8 +1729,18 @@ class GeometryLabInstrument implements GeometryLab {
     const second = this.#requirePlaneData(secondPlaneId);
     const line = intersectPlanes(first, second);
     if (!line) throw new KleinSdkError('parallel_planes', 'Parallel planes do not form an intersection line.');
-    const start = this.#makePoint3D({ ...add3(line.point, scale3(line.direction, -1)), hidden: true, locked: true });
-    const end = this.#makePoint3D({ ...add3(line.point, line.direction), hidden: true, locked: true });
+    const start = this.#makePoint3D({
+      ...add3(line.point, scale3(line.direction, -1)),
+      hidden: true,
+      locked: true,
+      construction: { kind: 'planePlaneIntersection', firstPlaneId, secondPlaneId, end: 0 },
+    });
+    const end = this.#makePoint3D({
+      ...add3(line.point, line.direction),
+      hidden: true,
+      locked: true,
+      construction: { kind: 'planePlaneIntersection', firstPlaneId, secondPlaneId, end: 1 },
+    });
     const entity = withEntity3DStyle<LineEntity>({
       id: this.#ids.next('line3'),
       kind: 'line',
@@ -993,6 +1915,75 @@ class GeometryLabInstrument implements GeometryLab {
     return entity.id;
   }
 
+  /**
+   * A surface given as an equation the whole of space has to satisfy.
+   *
+   * <p>The explicit kind - `z = f(x, y)` - can only be a graph, so a sphere, a
+   * torus and anything else with two sheets or a hole in it were simply
+   * unavailable. This samples the equation over a box and walks out the shape
+   * where it holds.
+   *
+   * <p>A box is needed because a surface has no extent of its own to infer one
+   * from: `x² + y² - z² = 1` goes on for ever, and what a student sees is
+   * whatever part of it is looked at.
+   */
+  addImplicitSurface3D(input: ImplicitSurfaceInput3D, style: GeometryLabStyleOptions = {}): string {
+    this.#assertWritable();
+    this.#assertInputString('Implicit surface equation', input.input);
+    const compiled = compileImplicitSurface3D(input.input);
+    const domain = {
+      x: implicitRange(input.domain?.x, 'x'),
+      y: implicitRange(input.domain?.y, 'y'),
+      z: implicitRange(input.domain?.z, 'z'),
+    };
+    const resolution = Math.max(2, Math.floor(input.resolution ?? DEFAULT_IMPLICIT_RESOLUTION));
+    // The budget is a count of evaluations, and a grid's is cubic in its
+    // resolution - so this is where a request for detail meets the limit, and
+    // the message says how many it asked for rather than only that it was too
+    // many.
+    this.#assertInputCount(
+      'Surface continuity probe evaluations',
+      isosurfaceEvaluationCount(resolution),
+      this.#complexityLimits.maxSamplerProbeEvaluations,
+    );
+
+    const surface = marchIsosurface3D({
+      field: compiled.field,
+      bounds: domain,
+      resolution,
+      maxEvaluations: this.#complexityLimits.maxSamplerProbeEvaluations,
+    });
+    if (!surface.faces.length) {
+      throw new KleinSdkError(
+        'invalid_surface',
+        'The equation is not satisfied anywhere inside that box, so there is nothing to draw. Try a larger domain.',
+      );
+    }
+    this.#assertInputCount(
+      'Surface vertices per entity',
+      surface.vertices.length,
+      this.#complexityLimits.maxSurfaceVerticesPerEntity,
+    );
+    this.#assertInputCount(
+      'Surface faces per entity',
+      surface.faces.length,
+      this.#complexityLimits.maxSurfaceFacesPerEntity,
+    );
+
+    const entity = withEntity3DStyle<SurfaceEntity3D>({
+      id: this.#ids.next('surf3'),
+      kind: 'surface3d',
+      surfaceKind: 'implicit',
+      vertices: surface.vertices,
+      faces: surface.faces,
+      input: compiled.input,
+      domain,
+      samples: { x: resolution, y: resolution, z: resolution },
+    }, style);
+    this.#commitDelta({ op: 'addEntity3D', entity });
+    return entity.id;
+  }
+
   addEquationSurface3D(input: EquationSurfaceInput3D, style: GeometryLabStyleOptions = {}): string {
     this.#assertWritable();
     this.#assertInputString('Equation input', input.input);
@@ -1115,6 +2106,31 @@ class GeometryLabInstrument implements GeometryLab {
       ],
     });
     return net.id;
+  }
+
+  /**
+   * The net part-way folded, at `t` from nought (flat) to one (the solid).
+   *
+   * <p>Derived rather than stored: a fold is a thing a host animates by asking
+   * for it sixty times a second, and putting the intermediate positions in the
+   * document would send every frame of it through undo and every collaborative
+   * message. The net and the solid are what is persisted, and the states in
+   * between are computed from them.
+   */
+  foldNet(netId: string, t: number): FoldedFace3D[] {
+    const net = this.#snapshot.scene.scene3d.nets[netId];
+    if (!net) throw new KleinSdkError('missing_net', `Net "${netId}" does not exist.`);
+    const solid = this.#requireSolid(net.solidId);
+    const scene = this.#snapshot.scene.scene3d;
+    return foldSolidNet(unfoldSolidNet(solid, scene.points), solid, scene.points, finiteNumber(t, 'Fold'));
+  }
+
+  /** Which faces of the flat net lie on top of each other, if any do. */
+  netOverlaps(netId: string): (readonly [string, string])[] {
+    const net = this.#snapshot.scene.scene3d.nets[netId];
+    if (!net) throw new KleinSdkError('missing_net', `Net "${netId}" does not exist.`);
+    const solid = this.#requireSolid(net.solidId);
+    return [...unfoldSolidNet(solid, this.#snapshot.scene.scene3d.points).overlaps];
   }
 
   measureVolume(solidId: string): number {
@@ -1287,7 +2303,9 @@ class GeometryLabInstrument implements GeometryLab {
     return entity.id;
   }
 
-  #makePoint3D(point: Vector3 & GeometryLabStyleOptions): GeometryPoint3D {
+  #makePoint3D(
+    point: Vector3 & GeometryLabStyleOptions & { construction?: GeometryConstruction },
+  ): GeometryPoint3D {
     const next: GeometryPoint3D = {
       id: this.#ids.next('p3'),
       kind: 'point3d',
@@ -1299,6 +2317,9 @@ class GeometryLabInstrument implements GeometryLab {
     if (point.color !== undefined) next.color = point.color;
     if (point.hidden !== undefined) next.hidden = point.hidden;
     if (point.locked !== undefined) next.locked = point.locked;
+    // Carried so canonicalization can rebuild the position whenever a source
+    // moves. The coordinates above are only the value at creation time.
+    if (point.construction !== undefined) next.construction = point.construction;
     return next;
   }
 
@@ -1370,6 +2391,7 @@ class GeometryLabInstrument implements GeometryLab {
       throw sdkError;
     }
     this.#snapshot = next;
+    this.#recordTraces();
     if (recordHistory && historyEntry) {
       this.#recordHistoryEntry(historyEntry);
     } else if (options.invalidateHistory) {
@@ -1423,7 +2445,13 @@ class GeometryLabInstrument implements GeometryLab {
 
   #renderSnapshot(snapshot: GeometryLabSnapshot): void {
     if (!this.#root) return;
-    const markup = renderGeometryLabSvg3D(snapshot, { format: 'svg' }, this.#renderComplexityLimits);
+    // Focusable here and nowhere else: a mounted figure is the thing a keyboard
+    // user is navigating, whereas an exported one is usually embedded in a page
+    // that has its own tab order and does not want a hundred more stops in it.
+    const options: Partial<ExportOptions> = { format: 'svg', focusableObjects: true };
+    const markup = rendersTwoDimensionalScene(snapshot)
+      ? renderGeometryLabSvg2D(snapshot, options, this.#renderComplexityLimits)
+      : renderGeometryLabSvg3D(snapshot, options, this.#renderComplexityLimits);
     this.#root.innerHTML = markup;
   }
 
@@ -1608,25 +2636,6 @@ function geometryLabSnapshotJson(snapshot: GeometryLabSnapshot, includeAppState:
   return contentOnly as unknown as JsonValue;
 }
 
-function geometryLabSummaryText(snapshot: GeometryLabSnapshot): string {
-  const scene = snapshot.scene.scene3d;
-  const points = Object.keys(scene.points).length;
-  const entities = Object.values(scene.entities);
-  const solids = entities.filter(entity => entity.kind === 'solid').length;
-  const surfaces = entities.filter(entity => entity.kind === 'surface3d').length;
-  const curves = entities.filter(entity => entity.kind === 'curve3d').length;
-  const measurements = Object.keys(scene.measurements).length;
-  return [
-    'Klein 3D Calculator',
-    `points: ${points}`,
-    `entities: ${entities.length}`,
-    `solids: ${solids}`,
-    `surfaces: ${surfaces}`,
-    `curves: ${curves}`,
-    `measurements: ${measurements}`,
-  ].join('\n');
-}
-
 type WorkPlaneThroughSource = Extract<
   WorkPlaneSource3D,
   { kind: 'parallelPlane' | 'perpendicularPlane' | 'perpendicularLine' }
@@ -1746,6 +2755,54 @@ function intersectPlanes(first: PlaneData3D, second: PlaneData3D): GeometryLine3
   return intersection.kind === 'line'
     ? { point: { ...intersection.point }, direction: { ...intersection.direction } }
     : null;
+}
+
+/** The 2D counterparts of {@link withEntity3DStyle}, over the shared geometry records. */
+/**
+ * Whether a snapshot should be drawn as a 2D scene.
+ *
+ * <p>`activeView` alone is not the signal it looks like: it defaults to `'2d'`,
+ * so every 3D scene ever built without setting it would suddenly render as an
+ * empty 2D one. The view must therefore be corroborated by the scene actually
+ * holding 2D content, which also keeps the previous behaviour exactly - before
+ * there was a 2D renderer, SVG always meant the 3D scene, and it still does for
+ * every snapshot that has nothing 2D in it.
+ */
+/**
+ * Cells along an axis by default.
+ *
+ * <p>Thirty-two cells is 35,937 corners - inside the probe budget, and fine
+ * enough that a sphere reads as one rather than as a gem. The cost is cubic, so
+ * this is a number worth being deliberate about.
+ */
+const DEFAULT_IMPLICIT_RESOLUTION = 32;
+
+/** The box to look for a surface in, defaulting to one centred on the origin. */
+function implicitRange(range: [number, number] | undefined, axis: string): [number, number] {
+  if (range === undefined) return [-5, 5];
+  const [low, high] = range;
+  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) {
+    throw new KleinSdkError('invalid_surface_domain', `The ${axis} range needs a finite low and high, in that order.`);
+  }
+  return [low, high];
+}
+
+function withEntity2DStyle<T extends GeometryEntity>(entity: T, style: GeometryLabStyleOptions): T {
+  const next = { ...entity } as T & GeometryLabStyleOptions;
+  if (style.label !== undefined) next.label = style.label;
+  if (style.color !== undefined) next.color = style.color;
+  if (style.hidden !== undefined) next.hidden = style.hidden;
+  if (style.locked !== undefined) next.locked = style.locked;
+  return next as T;
+}
+
+function withPoint2DStyle(point: GeometryPoint2D, style: GeometryLabStyleOptions): GeometryPoint2D {
+  const next = { ...point };
+  if (style.label !== undefined) next.label = style.label;
+  if (style.color !== undefined) next.color = style.color;
+  if (style.hidden !== undefined) next.hidden = style.hidden;
+  if (style.locked !== undefined) next.locked = style.locked;
+  return next;
 }
 
 function withEntity3DStyle<T extends GeometryEntity3D>(entity: T, style: GeometryLabStyleOptions): T {
@@ -2048,6 +3105,45 @@ function radiansToDegrees(radians: number): number {
 
 function cloneSnapshot(snapshot: GeometryLabSnapshot): GeometryLabSnapshot {
   return JSON.parse(JSON.stringify(snapshot)) as GeometryLabSnapshot;
+}
+
+/**
+ * Snapshots whose shell has already been frozen, so repeated reads of the same
+ * version cost nothing. Keyed by the snapshot object: a new version is a new
+ * key, and there is nothing to invalidate.
+ */
+const frozenGeometryLabShells = new WeakSet<GeometryLabSnapshot>();
+
+/**
+ * Freezes the snapshot's containers - the snapshot, its scenes, its app state
+ * and the eight record maps - and nothing below them.
+ *
+ * <p>Bounded work regardless of scene size, which is the whole point: the
+ * records inside can hold tens of thousands of mesh vertices, and walking them
+ * would cost more than the deep copy this replaces.
+ */
+function freezeGeometryLabSnapshotShell(snapshot: GeometryLabSnapshot): GeometryLabSnapshot {
+  if (frozenGeometryLabShells.has(snapshot)) return snapshot;
+
+  const scene2d = snapshot.scene.scene2d;
+  const scene3d = snapshot.scene.scene3d;
+  Object.freeze(scene2d.points);
+  Object.freeze(scene2d.entities);
+  if (scene2d.constraints) Object.freeze(scene2d.constraints);
+  Object.freeze(scene3d.points);
+  Object.freeze(scene3d.entities);
+  Object.freeze(scene3d.workPlanes);
+  Object.freeze(scene3d.measurements);
+  Object.freeze(scene3d.nets);
+  Object.freeze(scene2d);
+  Object.freeze(scene3d);
+  Object.freeze(snapshot.scene.links);
+  Object.freeze(snapshot.scene);
+  Object.freeze(snapshot.appState);
+  Object.freeze(snapshot);
+
+  frozenGeometryLabShells.add(snapshot);
+  return snapshot;
 }
 
 function geometryLabSdkError(error: unknown, fallbackCode: string): KleinSdkError {

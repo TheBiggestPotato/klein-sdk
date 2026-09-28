@@ -1,8 +1,8 @@
 import { KleinSdkError } from '../core/index.js';
 import type { JsonValue, ValidationIssue, Vector2, Vector3 } from '../core/index.js';
 import type { GeometryConstruction, GeometryConstraint, GeometryEntity, GeometryPoint } from '../geometry-core/index.js';
-import { buildGeometryLabDependencyGraph } from './dependencies.js';
-import type { GeometryLabDependencyGraph, GeometryLabDependencyKey } from './dependencies.js';
+import { buildGeometryLabIntegrityView, geometryLabMeasurement2DSourceIds } from './dependencies.js';
+import type { GeometryLabDependencyKey, GeometryLabIntegrityView } from './dependencies.js';
 import type {
   GeometryEntity3D,
   GeometryLabSnapshot,
@@ -25,6 +25,8 @@ export function getGeometryLabInvariantIssues(snapshot: GeometryLabSnapshot): Va
   registerRecord('scene.scene2d.points', scene2d.points, seenIds, issues);
   registerRecord('scene.scene2d.entities', scene2d.entities, seenIds, issues);
   registerRecord('scene.scene2d.constraints', scene2d.constraints ?? {}, seenIds, issues);
+  registerRecord('scene.scene2d.sliders', scene2d.sliders ?? {}, seenIds, issues);
+  registerRecord('scene.scene2d.measurements', scene2d.measurements ?? {}, seenIds, issues);
   registerRecord('scene.scene3d.points', scene3d.points, seenIds, issues);
   registerRecord('scene.scene3d.entities', scene3d.entities, seenIds, issues);
   registerRecord('scene.scene3d.workPlanes', scene3d.workPlanes, seenIds, issues);
@@ -40,6 +42,7 @@ export function getGeometryLabInvariantIssues(snapshot: GeometryLabSnapshot): Va
   const measurementIds = new Set(Object.keys(scene3d.measurements));
   const netIds = new Set(Object.keys(scene3d.nets));
   const constraintIds = new Set(Object.keys(scene2d.constraints ?? {}));
+  const sliderIds = new Set(Object.keys(scene2d.sliders ?? {}));
   const topLevelIds = unionSets(
     point2dIds,
     entity2dIds,
@@ -49,6 +52,7 @@ export function getGeometryLabInvariantIssues(snapshot: GeometryLabSnapshot): Va
     measurementIds,
     netIds,
     constraintIds,
+    sliderIds,
   );
 
   for (const [id, point] of Object.entries(scene2d.points)) {
@@ -70,6 +74,17 @@ export function getGeometryLabInvariantIssues(snapshot: GeometryLabSnapshot): Va
   }
   for (const [id, constraint] of Object.entries(scene2d.constraints ?? {})) {
     checkConstraintReferences(constraint, `scene.scene2d.constraints.${id}`, point2dIds, entity2dIds, issues);
+  }
+  for (const [id, measurement] of Object.entries(scene2d.measurements ?? {})) {
+    const path = `scene.scene2d.measurements.${id}`;
+    checkFinite(measurement.value, `${path}.value`, issues);
+    for (const sourceId of geometryLabMeasurement2DSourceIds(measurement.source)) {
+      // Sources are points or entities depending on the kind, so both sets are
+      // acceptable and only a name in neither is a dangling reference.
+      if (!point2dIds.has(sourceId) && !entity2dIds.has(sourceId)) {
+        addIssue(issues, `${path}.source`, `Measurement references missing 2D object "${sourceId}".`);
+      }
+    }
   }
   for (const [id, entity] of Object.entries(scene3d.entities)) {
     checkEntity3D(entity, `scene.scene3d.entities.${id}`, point3dIds, entity3dIds, workPlaneIds, topLevelIds, issues);
@@ -254,8 +269,46 @@ function checkSolid(solid: SolidEntity, path: string, pointIds: Set<string>, iss
   checkOptionalFinite(solid.surfaceArea, `${path}.surfaceArea`, issues);
 }
 
+/**
+ * Mesh arrays whose integrity has already been established.
+ *
+ * <p>Keyed on the arrays rather than on the surface, because canonicalization
+ * rebuilds the surface object on every edit while reattaching these same arrays
+ * by reference - so a surface-keyed cache would never hit. Only clean results
+ * are remembered, so a malformed mesh is reported every time.
+ *
+ * <p>Faces additionally record the vertex count they were checked against,
+ * since the bounds check below depends on it: the same face array against a
+ * shorter vertex array is a different question and is re-checked.
+ */
+const checkedSurfaceVertices = new WeakSet<object>();
+const checkedSurfaceFaces = new WeakMap<object, number>();
+
 function checkSurface(surface: SurfaceEntity3D, path: string, issues: ValidationIssue[]): void {
-  surface.vertices.forEach((vertex, index) => checkVector3(vertex, `${path}.vertices[${index}]`, issues));
+  if (!checkedSurfaceVertices.has(surface.vertices)) {
+    const before = issues.length;
+    surface.vertices.forEach((vertex, index) => checkVector3(vertex, `${path}.vertices[${index}]`, issues));
+    if (issues.length === before) checkedSurfaceVertices.add(surface.vertices);
+  }
+
+  if (checkedSurfaceFaces.get(surface.faces) !== surface.vertices.length) {
+    const before = issues.length;
+    checkSurfaceFaces(surface, path, issues);
+    if (issues.length === before) checkedSurfaceFaces.set(surface.faces, surface.vertices.length);
+  }
+  for (const [axis, range] of Object.entries(surface.domain ?? {})) {
+    if (!range) continue;
+    checkFinite(range[0], `${path}.domain.${axis}[0]`, issues);
+    checkFinite(range[1], `${path}.domain.${axis}[1]`, issues);
+    if (range[1] <= range[0]) addIssue(issues, `${path}.domain.${axis}`, 'Surface domain ranges must be increasing.');
+  }
+  for (const [axis, samples] of Object.entries(surface.samples ?? {})) {
+    if (samples !== undefined) checkPositiveInteger(samples, `${path}.samples.${axis}`, issues);
+  }
+}
+
+/** The face half of {@link checkSurface}, split out so it can be cached on its own. */
+function checkSurfaceFaces(surface: SurfaceEntity3D, path: string, issues: ValidationIssue[]): void {
   for (let faceIndex = 0; faceIndex < surface.faces.length; faceIndex += 1) {
     const face = surface.faces[faceIndex];
     if (!face) continue;
@@ -267,15 +320,6 @@ function checkSurface(surface: SurfaceEntity3D, path: string, issues: Validation
         addIssue(issues, `${facePath}[${indexPosition}]`, `Surface vertex index ${index} is out of bounds.`);
       }
     });
-  }
-  for (const [axis, range] of Object.entries(surface.domain ?? {})) {
-    if (!range) continue;
-    checkFinite(range[0], `${path}.domain.${axis}[0]`, issues);
-    checkFinite(range[1], `${path}.domain.${axis}[1]`, issues);
-    if (range[1] <= range[0]) addIssue(issues, `${path}.domain.${axis}`, 'Surface domain ranges must be increasing.');
-  }
-  for (const [axis, samples] of Object.entries(surface.samples ?? {})) {
-    if (samples !== undefined) checkPositiveInteger(samples, `${path}.samples.${axis}`, issues);
   }
 }
 
@@ -375,6 +419,51 @@ function checkMeasurement(
     return;
   }
 
+  const isLineLike = (id: string, field: string): void => {
+    const entity = entities[id];
+    if (!entity || (entity.kind !== 'line' && entity.kind !== 'segment' && entity.kind !== 'ray' && entity.kind !== 'vector')) {
+      addIssue(issues, `${path}.source.${field}`, `Measurement references missing line "${id}".`);
+    }
+  };
+  const requiresKind = (expected: Measurement3D['kind'], description: string): void => {
+    if (measurement.kind !== expected) {
+      addIssue(issues, `${path}.source.kind`, `${description} requires a ${expected} measurement.`);
+    }
+  };
+
+  if (source.kind === 'pointPointDistance') {
+    requireReference(source.firstPointId, pointIds, `${path}.source.firstPointId`, '3D point', issues);
+    requireReference(source.secondPointId, pointIds, `${path}.source.secondPointId`, '3D point', issues);
+    requiresKind('length', 'A point-point distance source');
+    return;
+  }
+  if (source.kind === 'pointLineDistance') {
+    requireReference(source.pointId, pointIds, `${path}.source.pointId`, '3D point', issues);
+    isLineLike(source.lineEntityId, 'lineEntityId');
+    requiresKind('length', 'A point-line distance source');
+    return;
+  }
+  if (source.kind === 'lineLineAngle') {
+    isLineLike(source.firstLineId, 'firstLineId');
+    isLineLike(source.secondLineId, 'secondLineId');
+    requiresKind('angle', 'A line-line angle source');
+    return;
+  }
+  if (source.kind === 'linePlaneAngle') {
+    isLineLike(source.lineEntityId, 'lineEntityId');
+    if (!workPlaneIds.has(source.planeId) && entities[source.planeId]?.kind !== 'plane') {
+      addIssue(issues, `${path}.source.planeId`, `Measurement references missing plane "${source.planeId}".`);
+    }
+    requiresKind('angle', 'A line-plane angle source');
+    return;
+  }
+  if (source.kind === 'lineLineDistance') {
+    isLineLike(source.firstLineId, 'firstLineId');
+    isLineLike(source.secondLineId, 'secondLineId');
+    requiresKind('length', 'A line-line distance source');
+    return;
+  }
+
   const solid = entities[source.solidId];
   if (!solid || solid.kind !== 'solid') {
     addIssue(issues, `${path}.source.solidId`, `Measurement references missing solid "${source.solidId}".`);
@@ -463,7 +552,10 @@ function checkSelection(
 }
 
 function checkDependencyGraph(snapshot: GeometryLabSnapshot, issues: ValidationIssue[]): void {
-  const graph = buildGeometryLabDependencyGraph(snapshot);
+  // The lean view rather than the full graph: this check reads node paths,
+  // forward adjacency and ownership conflicts, and the full graph builds nine
+  // further indexes nothing here touches - on every edit.
+  const graph = buildGeometryLabIntegrityView(snapshot);
   for (const conflict of graph.ownershipConflicts) {
     const node = graph.nodesByKey[conflict.ownedKey];
     addIssue(
@@ -483,7 +575,7 @@ function checkDependencyGraph(snapshot: GeometryLabSnapshot, issues: ValidationI
   }
 }
 
-function dependencyCycles(graph: GeometryLabDependencyGraph): GeometryLabDependencyKey[][] {
+function dependencyCycles(graph: GeometryLabIntegrityView): GeometryLabDependencyKey[][] {
   const states = new Map<GeometryLabDependencyKey, 'active' | 'done'>();
   const stack: GeometryLabDependencyKey[] = [];
   const cycles = new Map<string, GeometryLabDependencyKey[]>();
@@ -504,7 +596,8 @@ function dependencyCycles(graph: GeometryLabDependencyGraph): GeometryLabDepende
     states.set(key, 'done');
   };
 
-  for (const key of Object.keys(graph.nodesByKey).sort() as GeometryLabDependencyKey[]) visit(key);
+  // Already sorted by the view, so no second sort of every node key.
+  for (const key of graph.sortedKeys) visit(key);
   return [...cycles.values()].sort((first, second) => first.join('\u0000').localeCompare(second.join('\u0000')));
 }
 

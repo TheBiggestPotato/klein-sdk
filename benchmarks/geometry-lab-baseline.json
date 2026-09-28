@@ -1,0 +1,245 @@
+{
+  "schema": 1,
+  "calibrationMs": 48.9558,
+  "gcAvailable": true,
+  "samples": 25,
+  "cases": {
+    "drag-chain-500": {
+      "title": "Drag one point, 500-object chain scene",
+      "findings": [
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "budgetMs": 4,
+      "medianMs": 2.5938,
+      "normalizedTime": 0.05298,
+      "retainedHeapBytes": 264800,
+      "churnHeapBytes": 3285080,
+      "withinBudget": true
+    },
+    "drag-fanout-400": {
+      "title": "Drag a hub with 400 dependents",
+      "findings": [
+        "P2",
+        "P3"
+      ],
+      "budgetMs": 4,
+      "medianMs": 4.7898,
+      "normalizedTime": 0.09784,
+      "retainedHeapBytes": 9557552,
+      "churnHeapBytes": 15703224,
+      "withinBudget": false
+    },
+    "drag-mesh-4-surfaces": {
+      "title": "Move one unrelated point in a 4-surface scene (36,864 vertices)",
+      "findings": [
+        "P11"
+      ],
+      "budgetMs": 4,
+      "medianMs": 0.4115,
+      "normalizedTime": 0.00841,
+      "retainedHeapBytes": 21296,
+      "churnHeapBytes": 3184776,
+      "withinBudget": true
+    },
+    "snapshot-read-mesh": {
+      "title": "getSnapshot() on a 4-surface scene",
+      "findings": [
+        "P6"
+      ],
+      "budgetMs": 4,
+      "medianMs": 11.6333,
+      "normalizedTime": 0.23763,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 27195488,
+      "withinBudget": false
+    },
+    "drag-plane-10-dependents": {
+      "title": "Drag a work plane carrying 10 line-plane intersections",
+      "findings": [],
+      "budgetMs": 4,
+      "medianMs": 0.3345,
+      "normalizedTime": 0.00683,
+      "retainedHeapBytes": 476208,
+      "churnHeapBytes": 13538872,
+      "withinBudget": true
+    },
+    "drag-plane-3-cross-sections": {
+      "title": "Drag a plane slicing three solids, recutting each section",
+      "findings": [],
+      "budgetMs": 4,
+      "medianMs": 1.2886,
+      "normalizedTime": 0.02632,
+      "retainedHeapBytes": 911880,
+      "churnHeapBytes": 7822664,
+      "withinBudget": true
+    },
+    "drag-20-constraints": {
+      "title": "Drag one end of a chain held by 20 fixed-length constraints",
+      "findings": [],
+      "budgetMs": 4,
+      "medianMs": 0.2828,
+      "normalizedTime": 0.00578,
+      "retainedHeapBytes": 49720,
+      "churnHeapBytes": 14726136,
+      "withinBudget": true
+    },
+    "delta-roundtrip-500": {
+      "title": "Single add delta onto a 500-point 3D scene",
+      "findings": [
+        "P5"
+      ],
+      "budgetMs": 0.5,
+      "medianMs": 2.4095,
+      "normalizedTime": 0.04922,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 22724256,
+      "withinBudget": false
+    },
+    "snapshot-read-500": {
+      "title": "getSnapshot() on a 500-point 3D scene",
+      "findings": [
+        "P6"
+      ],
+      "budgetMs": 0.5,
+      "medianMs": 0.3828,
+      "normalizedTime": 0.00782,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 9326712,
+      "withinBudget": true
+    },
+    "export-svg-500": {
+      "title": "SVG render of a 500-point 3D scene",
+      "findings": [],
+      "budgetMs": 16,
+      "medianMs": 3.8888,
+      "normalizedTime": 0.07944,
+      "retainedHeapBytes": 86336,
+      "churnHeapBytes": 30228728,
+      "withinBudget": true
+    },
+    "export-svg-500-plain": {
+      "title": "SVG render of a 500-point 3D scene, undescribed",
+      "findings": [],
+      "budgetMs": 16,
+      "medianMs": 2.0481,
+      "normalizedTime": 0.04184,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 22890288,
+      "withinBudget": true
+    },
+    "drag-with-locus": {
+      "title": "Drag on a 400-object scene carrying a 64-sample locus",
+      "findings": [],
+      "budgetMs": 8,
+      "medianMs": 4.622,
+      "normalizedTime": 0.09441,
+      "retainedHeapBytes": 504952,
+      "churnHeapBytes": 27574888,
+      "withinBudget": true
+    },
+    "invariants-24": {
+      "title": "computeGeometryInvariants over 24 points",
+      "findings": [
+        "P9"
+      ],
+      "budgetMs": 8,
+      "medianMs": 0.4868,
+      "normalizedTime": 0.00994,
+      "retainedHeapBytes": 53312,
+      "churnHeapBytes": 29087296,
+      "withinBudget": true
+    },
+    "invariants-3d": {
+      "title": "computeGeometryInvariants over a spatial figure",
+      "findings": [
+        "P9"
+      ],
+      "budgetMs": 8,
+      "medianMs": 0.2885,
+      "normalizedTime": 0.00589,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 14041624,
+      "withinBudget": true
+    },
+    "invariants-cap": {
+      "title": "computeGeometryInvariants at the 128-point cap",
+      "findings": [
+        "P9"
+      ],
+      "budgetMs": 8,
+      "medianMs": 5.1884,
+      "normalizedTime": 0.10598,
+      "retainedHeapBytes": 0,
+      "churnHeapBytes": 18120872,
+      "withinBudget": true
+    }
+  },
+  "scaling": {
+    "scale-drag-chain": {
+      "title": "Drag cost against scene size (chain)",
+      "findings": [
+        "P1"
+      ],
+      "targetExponent": 0.2,
+      "sizes": [
+        100,
+        400
+      ],
+      "smallMs": 0.5084,
+      "largeMs": 1.8199,
+      "timeExponent": 0.92,
+      "heapExponent": 0.522,
+      "meetsTarget": false
+    },
+    "scale-drag-fanout": {
+      "title": "Drag cost against dependent count (fan-out)",
+      "findings": [
+        "P2",
+        "P3"
+      ],
+      "targetExponent": 1.1,
+      "sizes": [
+        100,
+        400
+      ],
+      "smallMs": 1.1448,
+      "largeMs": 4.6649,
+      "timeExponent": 1.013,
+      "heapExponent": 0.985,
+      "meetsTarget": true
+    },
+    "scale-hit-test": {
+      "title": "Hit test cost against scene size",
+      "findings": [],
+      "targetExponent": 0.75,
+      "sizes": [
+        100,
+        400
+      ],
+      "smallMs": 0.0008,
+      "largeMs": 0.0008,
+      "timeExponent": -0.001,
+      "heapExponent": 1.352,
+      "meetsTarget": true
+    },
+    "scale-snapshot-heap": {
+      "title": "Retained snapshot heap against scene size",
+      "findings": [
+        "P8"
+      ],
+      "targetExponent": 1.1,
+      "sizes": [
+        100,
+        400
+      ],
+      "smallMs": 0.0686,
+      "largeMs": 0.3019,
+      "timeExponent": 1.069,
+      "heapExponent": -0.239,
+      "meetsTarget": true
+    }
+  }
+}

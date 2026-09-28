@@ -1,9 +1,14 @@
+import { exactMeasurement2D } from './exact-measurements.js';
+import { unfoldSolidNet } from './nets.js';
 import type { Vector2, Vector3 } from '../core/index.js';
 import {
   geometryAngleBisectorPoint2D,
   geometryCircleTangentPoint2D,
   geometryCircumcircle2D,
+  applyGeometryTransform2D,
+  constrainGeometryScene,
   geometryIntersectionPoint2D,
+  geometryPointOnPath2D,
   lineEquationFrom2DPoints,
   normalizeGeometryPlaneEquation3D,
   planeEquationFrom3DPoints,
@@ -11,12 +16,16 @@ import {
 } from '../geometry-core/index.js';
 import type {
   GeometryPlaneEquation3D,
+  GeometryPoint2D,
   GeometryPoint3D,
   PlaneEntity,
 } from '../geometry-core/index.js';
 import type {
   CrossSectionEntity,
   GeometryLabSnapshot,
+  GeometryScene2D,
+  Measurement2D,
+  MeasurementSource2D,
   GeometryScene3D,
   GeometrySelection,
   Measurement3D,
@@ -87,12 +96,25 @@ export function canonicalizeGeometryLabSnapshot(
   const next = cloneSnapshot(snapshot, options.reuseSurfaceMeshCaches === true);
   const legacySolidEdges = captureLegacySolidEdgeMappings(next.scene.scene3d);
   next.scene.scene2d = recomputeGeometryScene(next.scene.scene2d);
+  // Constraints have been storable and validated in the Lab from the start and
+  // were never enforced, so a fixed-length segment could be dragged to any
+  // length it liked. The solver is shared with the Geometry Calculator and caps
+  // its own relaxation passes, which is what keeps a contradictory figure from
+  // spinning on every edit.
+  //
+  // No changed-id hint is passed: canonicalization sees a finished snapshot,
+  // not the edit that produced it. The solver's fallback - prefer the second
+  // point of a pair, then the first - is deterministic, which is what a
+  // canonical form needs, though it means the Lab does not yet favour holding
+  // still the point a user is dragging the way the Calculator does.
+  next.scene.scene2d = constrainGeometryScene(next.scene.scene2d, []);
   assertRecomputableScene2D(next);
 
+  canonicalizeMeasurements2D(next.scene.scene2d);
+
   const scene3d = next.scene.scene3d;
-  canonicalizePointConstructions3D(scene3d);
+  canonicalizeConstructions3D(scene3d);
   assertSupportedEntityConstructions3D(scene3d);
-  canonicalizeWorkPlanes(scene3d);
   canonicalizeSolids(scene3d);
   canonicalizeCrossSections(scene3d);
   canonicalizeNets(scene3d);
@@ -119,6 +141,26 @@ function assertRecomputableScene2D(snapshot: GeometryLabSnapshot): void {
       const [firstId, secondId] = construction.sourceIds;
       if (scene.points[firstId]?.kind !== 'point2d' || scene.points[secondId]?.kind !== 'point2d') {
         fail('unrecomputable_2d', point.id, `Midpoint "${point.id}" has a missing 2D source point.`);
+      }
+    } else if (construction.kind === 'pointOnPath') {
+      if (!geometryPointOnPath2D(scene, construction)) {
+        fail(
+          'unrecomputable_2d',
+          point.id,
+          `Point "${point.id}" sits on an object with no path along it - the object is missing, or has collapsed to nothing.`,
+        );
+      }
+    } else if (construction.kind === 'transformedPoint') {
+      const source = scene.points[construction.sourceId];
+      if (source?.kind !== 'point2d') {
+        fail('unrecomputable_2d', point.id, `Transformed point "${point.id}" has a missing source.`);
+      }
+      if (!applyGeometryTransform2D(scene, construction.transform, source)) {
+        fail(
+          'unrecomputable_2d',
+          point.id,
+          `Transformed point "${point.id}" has an undefined transformation - its mirror, centre or vector is missing or degenerate.`,
+        );
       }
     } else {
       fail(
@@ -159,6 +201,16 @@ function assertRecomputableScene2D(snapshot: GeometryLabSnapshot): void {
       if (entity.kind !== 'line' || !source || !through || !lineLikeEquation2D(scene, source.id)) {
         fail('unrecomputable_2d', entity.id, `Constructed line "${entity.id}" has an invalid source line or point.`);
       }
+    } else if (entity.kind === 'locus' && construction.kind === 'dynamicLocus') {
+      const slider = scene.sliders?.[construction.sliderId];
+      const tracer = scene.points[construction.tracerId];
+      if (!slider || tracer?.kind !== 'point2d') {
+        fail(
+          'unrecomputable_2d',
+          entity.id,
+          `Locus "${entity.id}" has lost the slider that drives it or the point it traces.`,
+        );
+      }
     } else if (entity.kind === 'circle' && construction.kind === 'circleCenterPoint') {
       const center = scene.points[construction.centerPointId];
       const radiusPoint = scene.points[construction.radiusPointId];
@@ -192,6 +244,168 @@ function assertRecomputableScene2D(snapshot: GeometryLabSnapshot): void {
   }
 }
 
+/**
+ * Recomputes every 2D measurement from its source.
+ *
+ * <p>Same contract as the 3D measurements: what is stored is what the value is
+ * derived from, so the number follows the figure instead of recording what it
+ * happened to be when it was taken. A measurement whose source has gone, or has
+ * become something it cannot measure, fails the edit rather than keeping a
+ * stale value.
+ */
+/**
+ * Attaches the exact value to a measurement that has one.
+ *
+ * <p>Derived here rather than on demand, beside the float it belongs to, for
+ * the same reason every other derived thing is: one place rebuilds it, so a
+ * renderer, a description and a LaTeX export cannot each arrive at a different
+ * answer. Absent when no exact form was found, which is not the same as the
+ * value being irrational.
+ */
+function withExact(
+  scene: GeometryScene2D,
+  source: MeasurementSource2D,
+  measurement: Measurement2D,
+): Measurement2D {
+  const exact = exactMeasurement2D(scene, source, measurement.value);
+  if (!exact) {
+    // Deleted rather than left behind: a stale exact value from before a drag
+    // would be a confident wrong answer, which is worse than no answer.
+    const { exact: _dropped, ...rest } = measurement;
+    return rest;
+  }
+  return { ...measurement, exact };
+}
+
+function canonicalizeMeasurements2D(scene: GeometryScene2D): void {
+  const measurements = scene.measurements;
+  if (!measurements) return;
+
+  const point = (id: string, ownerId: string): GeometryPoint2D => {
+    const found = scene.points[id];
+    if (!found || found.kind !== 'point2d') {
+      fail('unrecomputable_measurement', ownerId, `Measurement "${ownerId}" references missing 2D point "${id}".`);
+    }
+    return found;
+  };
+  const polygonPoints = (id: string, ownerId: string): GeometryPoint2D[] => {
+    const entity = scene.entities[id];
+    if (!entity || entity.kind !== 'polygon') {
+      fail('unrecomputable_measurement', ownerId, `Measurement "${ownerId}" references missing polygon "${id}".`);
+    }
+    return entity.pointIds.map(pointId => point(pointId, ownerId));
+  };
+  const linePoints = (id: string, ownerId: string): [GeometryPoint2D, GeometryPoint2D] => {
+    const entity = scene.entities[id];
+    if (!entity || (entity.kind !== 'segment' && entity.kind !== 'line' && entity.kind !== 'ray' && entity.kind !== 'vector')) {
+      fail('unrecomputable_measurement', ownerId, `Measurement "${ownerId}" references missing line "${id}".`);
+    }
+    return [point(entity.pointIds[0], ownerId), point(entity.pointIds[1], ownerId)];
+  };
+  const requireKind = (measurement: Measurement2D, expected: Measurement2D['kind']): void => {
+    if (measurement.kind !== expected) {
+      fail('unrecomputable_measurement', measurement.id, `Measurement "${measurement.id}" has an incompatible source kind.`);
+    }
+  };
+  const distance = (first: Vector2, second: Vector2): number => Math.hypot(second.x - first.x, second.y - first.y);
+
+  for (const [id, measurement] of Object.entries(measurements)) {
+    const source = measurement.source;
+    if (source.kind === 'pointDistance' || source.kind === 'segmentLength') {
+      requireKind(measurement, 'length');
+      const [first, second] = source.kind === 'pointDistance'
+        ? [point(source.firstPointId, id), point(source.secondPointId, id)]
+        : linePoints(source.entityId, id);
+      measurements[id] = withExact(scene, source, {
+        ...measurement,
+        value: distance(first, second),
+        unit: 'u',
+        targetIds: source.kind === 'pointDistance'
+          ? [source.firstPointId, source.secondPointId]
+          : [source.entityId],
+      });
+      continue;
+    }
+
+    if (source.kind === 'pointLineDistance') {
+      requireKind(measurement, 'length');
+      const from = point(source.pointId, id);
+      const [first, second] = linePoints(source.entityId, id);
+      const dx = second.x - first.x;
+      const dy = second.y - first.y;
+      const length = Math.hypot(dx, dy);
+      if (length <= EPSILON) {
+        fail('unrecomputable_measurement', id, `Measurement "${id}" references a line with coincident points.`);
+      }
+      // Twice the triangle's area over its base: the perpendicular height.
+      const cross = Math.abs(dx * (from.y - first.y) - dy * (from.x - first.x));
+      measurements[id] = withExact(scene, source, {
+        ...measurement,
+        value: cross / length,
+        unit: 'u',
+        targetIds: [source.pointId, source.entityId],
+      });
+      continue;
+    }
+
+    if (source.kind === 'angle') {
+      requireKind(measurement, 'angle');
+      const [first, vertex, third] = source.pointIds.map(pointId => point(pointId, id)) as [GeometryPoint2D, GeometryPoint2D, GeometryPoint2D];
+      const armOne = { x: first.x - vertex.x, y: first.y - vertex.y };
+      const armTwo = { x: third.x - vertex.x, y: third.y - vertex.y };
+      const magnitude = Math.hypot(armOne.x, armOne.y) * Math.hypot(armTwo.x, armTwo.y);
+      if (magnitude <= EPSILON) {
+        fail('unrecomputable_measurement', id, `Measurement "${id}" has a degenerate angle.`);
+      }
+      const cosine = clamp((armOne.x * armTwo.x + armOne.y * armTwo.y) / magnitude, -1, 1);
+      measurements[id] = withExact(scene, source, {
+        ...measurement,
+        value: radiansToDegrees(Math.acos(cosine)),
+        unit: 'deg',
+        targetIds: [...source.pointIds],
+      });
+      continue;
+    }
+
+    const vertices = polygonPoints(source.entityId, id);
+    if (vertices.length < 3) {
+      fail('unrecomputable_measurement', id, `Measurement "${id}" references a polygon with fewer than three vertices.`);
+    }
+    if (source.kind === 'polygonArea') {
+      requireKind(measurement, 'area');
+      // The shoelace formula, unsigned so winding order does not flip the sign.
+      let twiceArea = 0;
+      for (let index = 0; index < vertices.length; index += 1) {
+        const current = vertices[index] as GeometryPoint2D;
+        const next = vertices[(index + 1) % vertices.length] as GeometryPoint2D;
+        twiceArea += current.x * next.y - next.x * current.y;
+      }
+      measurements[id] = withExact(scene, source, {
+        ...measurement,
+        value: Math.abs(twiceArea) / 2,
+        unit: 'u^2',
+        targetIds: [source.entityId],
+      });
+      continue;
+    }
+
+    requireKind(measurement, 'length');
+    let perimeter = 0;
+    for (let index = 0; index < vertices.length; index += 1) {
+      perimeter += distance(
+        vertices[index] as GeometryPoint2D,
+        vertices[(index + 1) % vertices.length] as GeometryPoint2D,
+      );
+    }
+    measurements[id] = withExact(scene, source, {
+      ...measurement,
+      value: perimeter,
+      unit: 'u',
+      targetIds: [source.entityId],
+    });
+  }
+}
+
 function lineLikeEquation2D(
   scene: GeometryLabSnapshot['scene']['scene2d'],
   entityId: string,
@@ -205,21 +419,38 @@ function lineLikeEquation2D(
   return first && second ? lineEquationFrom2DPoints(first, second) : null;
 }
 
-function canonicalizePointConstructions3D(scene: GeometryScene3D): void {
+/**
+ * Recomputes constructed 3D points and work planes in dependency order.
+ *
+ * <p>These were two passes: points first, then work planes. That ordering only
+ * worked because the only supported 3D point construction was a midpoint, which
+ * depends on points alone. It cannot survive intersections, because the
+ * dependency runs both ways - a work plane can be defined by three points, and
+ * a point can be defined as where a line meets that plane - so neither
+ * collection can be finished before the other.
+ *
+ * <p>One walk over both therefore, visiting each object after the objects it is
+ * built from, whichever collection those live in. Cycles are detected across
+ * both kinds rather than within each, which is what makes "a plane through a
+ * point that is defined by that plane" an error rather than a hang.
+ */
+function canonicalizeConstructions3D(scene: GeometryScene3D): void {
   const complete = new Set<string>();
   const active = new Set<string>();
 
-  const visit = (id: string): void => {
-    if (complete.has(id)) return;
+  const visitPoint = (id: string): void => {
+    const key = `point:${id}`;
+    if (complete.has(key)) return;
     const point = scene.points[id];
     if (!point) fail('unrecomputable_point', id, `Constructed point "${id}" does not exist.`);
-    if (active.has(id)) fail('unrecomputable_point', id, `Constructed point "${id}" is part of a source cycle.`);
-    active.add(id);
+    if (active.has(key)) fail('unrecomputable_point', id, `Constructed point "${id}" is part of a source cycle.`);
+    active.add(key);
+
     const construction = point.construction;
     if (construction?.kind === 'midpoint') {
       const [firstId, secondId] = construction.sourceIds;
-      if (scene.points[firstId]) visit(firstId);
-      if (scene.points[secondId]) visit(secondId);
+      if (scene.points[firstId]) visitPoint(firstId);
+      if (scene.points[secondId]) visitPoint(secondId);
       const first = scene.points[firstId];
       const second = scene.points[secondId];
       if (!first || !second) {
@@ -231,6 +462,42 @@ function canonicalizePointConstructions3D(scene: GeometryScene3D): void {
         y: (first.y + second.y) / 2,
         z: (first.z + second.z) / 2,
       };
+    } else if (construction?.kind === 'linePlaneIntersection') {
+      visitLineSources(construction.lineEntityId);
+      visitPlaneReference(construction.planeId);
+      const line = lineDataForEntity(scene, construction.lineEntityId, id);
+      const plane = planeDataForReference(scene, construction.planeId, id);
+      const position = intersectLineWithPlane(line, plane);
+      if (!position) {
+        fail(
+          'unrecomputable_point',
+          id,
+          `Line-plane intersection "${id}" no longer meets its plane in a single point.`,
+        );
+      }
+      scene.points[id] = { ...point, x: position.x, y: position.y, z: position.z };
+    } else if (construction?.kind === 'planePlaneIntersection') {
+      visitPlaneReference(construction.firstPlaneId);
+      visitPlaneReference(construction.secondPlaneId);
+      const first = planeDataForReference(scene, construction.firstPlaneId, id);
+      const second = planeDataForReference(scene, construction.secondPlaneId, id);
+      const line = intersectPlaneWithPlane(first, second);
+      if (!line) {
+        fail(
+          'unrecomputable_point',
+          id,
+          `Plane-plane intersection "${id}" no longer has a unique intersection line.`,
+        );
+      }
+      // The two endpoints sit one unit either side of the line's base point, so
+      // the pair spans the line deterministically wherever the planes move.
+      const offset = construction.end === 0 ? -1 : 1;
+      scene.points[id] = {
+        ...point,
+        x: line.point.x + line.direction.x * offset,
+        y: line.point.y + line.direction.y * offset,
+        z: line.point.z + line.direction.z * offset,
+      };
     } else if (construction) {
       fail(
         'unrecomputable_point',
@@ -238,11 +505,64 @@ function canonicalizePointConstructions3D(scene: GeometryScene3D): void {
         `3D point construction "${construction.kind}" is not deterministically supported.`,
       );
     }
-    active.delete(id);
-    complete.add(id);
+
+    active.delete(key);
+    complete.add(key);
   };
 
-  for (const id of Object.keys(scene.points).sort()) visit(id);
+  const visitPlane = (id: string): void => {
+    const key = `plane:${id}`;
+    if (complete.has(key)) return;
+    const plane = scene.workPlanes[id];
+    if (!plane) fail('unrecomputable_work_plane', id, `Work plane "${id}" does not exist.`);
+    if (active.has(key)) fail('work_plane_cycle', id, `Work plane "${id}" is part of a source cycle.`);
+
+    active.add(key);
+    const source = plane.source;
+    if (source) {
+      if (source.kind === 'parallelPlane' || source.kind === 'perpendicularPlane') {
+        visitPlaneReference(source.sourcePlaneId);
+      }
+      if (source.kind === 'perpendicularLine') visitLineSources(source.sourceEntityId);
+      if (source.kind === 'threePoints') {
+        for (const pointId of source.pointIds) {
+          if (scene.points[pointId]) visitPoint(pointId);
+        }
+      }
+      if ('throughPointId' in source && source.throughPointId && scene.points[source.throughPointId]) {
+        visitPoint(source.throughPointId);
+      }
+    }
+    scene.workPlanes[id] = canonicalWorkPlane(scene, plane);
+    active.delete(key);
+    complete.add(key);
+  };
+
+  /** A plane reference may name a work plane or a plane entity; only the former is recomputed. */
+  const visitPlaneReference = (id: string): void => {
+    if (scene.workPlanes[id]) {
+      visitPlane(id);
+      return;
+    }
+    const entity = scene.entities[id];
+    if (entity && entity.kind === 'plane') {
+      for (const pointId of entity.pointIds) {
+        if (scene.points[pointId]) visitPoint(pointId);
+      }
+    }
+  };
+
+  /** Line-like entities carry no construction of their own, but their points may. */
+  const visitLineSources = (entityId: string): void => {
+    const entity = scene.entities[entityId];
+    if (!entity || !('pointIds' in entity)) return;
+    for (const pointId of entity.pointIds) {
+      if (scene.points[pointId]) visitPoint(pointId);
+    }
+  };
+
+  for (const id of Object.keys(scene.points).sort()) visitPoint(id);
+  for (const id of Object.keys(scene.workPlanes).sort()) visitPlane(id);
 }
 
 function assertSupportedEntityConstructions3D(scene: GeometryScene3D): void {
@@ -274,27 +594,61 @@ interface PlaneData3D {
   equation: GeometryPlaneEquation3D;
 }
 
-function canonicalizeWorkPlanes(scene: GeometryScene3D): void {
-  const complete = new Set<string>();
-  const active = new Set<string>();
+/**
+ * Where a line meets a plane, or null when it runs parallel to it.
+ *
+ * <p>Parallel is a real answer rather than an error here: the caller decides
+ * what to do about a construction whose sources have moved into a degenerate
+ * arrangement, and for a constructed point that means failing canonicalization
+ * rather than leaving a stale position behind.
+ */
+function intersectLineWithPlane(
+  line: { point: Vector3; direction: Vector3 },
+  plane: PlaneData3D,
+): Vector3 | null {
+  // Normalized first, so the test below is the cosine of the angle between the
+  // line and the plane's normal rather than a quantity that shrinks with the
+  // line's length. A line whose two defining points are a picometre apart is
+  // still perfectly well conditioned, and an absolute threshold on the raw
+  // direction would call it parallel to everything.
+  const direction = normalize3(line.direction);
+  if (!direction) return null;
+  const denominator = dot3(plane.normal, direction);
+  if (Math.abs(denominator) <= EPSILON) return null;
+  // The stored equation is `n . x + d = 0`, so the plane sits at `n . x = -d`.
+  const t = (-plane.d - dot3(plane.normal, line.point)) / denominator;
+  if (!Number.isFinite(t)) return null;
+  return add3(line.point, scale3(direction, t));
+}
 
-  const visit = (id: string): void => {
-    if (complete.has(id)) return;
-    const plane = scene.workPlanes[id];
-    if (!plane) fail('unrecomputable_work_plane', id, `Work plane "${id}" does not exist.`);
-    if (active.has(id)) fail('work_plane_cycle', id, `Work plane "${id}" is part of a source cycle.`);
+/** The line where two planes meet, or null when they are parallel or coincident. */
+function intersectPlaneWithPlane(
+  first: PlaneData3D,
+  second: PlaneData3D,
+): { point: Vector3; direction: Vector3 } | null {
+  // Deliberately the same formulation as `geometryPlanePlaneIntersection3D` in
+  // geometry-core, so the position canonicalization computes is the position
+  // the instrument computed when the object was created.
+  //
+  // Conditioned on the cross product rather than on `1 - cos^2`: two planes
+  // meeting at a very shallow angle still define a perfectly good line, and
+  // testing the squared cosine rejects them long before the line itself becomes
+  // ill-conditioned.
+  const cross = cross3(first.normal, second.normal);
+  const crossLengthSquared = dot3(cross, cross);
+  if (crossLengthSquared < 1e-12) return null;
+  const direction = normalize3(cross);
+  if (!direction) return null;
 
-    active.add(id);
-    const source = plane.source;
-    if (source && (source.kind === 'parallelPlane' || source.kind === 'perpendicularPlane')) {
-      if (scene.workPlanes[source.sourcePlaneId]) visit(source.sourcePlaneId);
-    }
-    scene.workPlanes[id] = canonicalWorkPlane(scene, plane);
-    active.delete(id);
-    complete.add(id);
-  };
-
-  for (const id of Object.keys(scene.workPlanes)) visit(id);
+  const point = scale3(
+    cross3(
+      subtract3(scale3(first.normal, second.d), scale3(second.normal, first.d)),
+      cross,
+    ),
+    1 / crossLengthSquared,
+  );
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) return null;
+  return { point, direction };
 }
 
 function canonicalWorkPlane(scene: GeometryScene3D, plane: WorkPlane3D): WorkPlane3D {
@@ -331,22 +685,32 @@ function canonicalWorkPlane(scene: GeometryScene3D, plane: WorkPlane3D): WorkPla
 
   if (source.kind === 'perpendicularLine') {
     const line = lineDataForEntity(scene, source.sourceEntityId, plane.id);
-    const origin = throughPoint(scene, source, tupleToVector3(plane.origin), plane.id);
-    return buildWorkPlane(plane, equationFromPointNormal(origin, line.direction), origin);
+    // `throughPoint` records the resolved origin on the source. Snapshots share
+    // record objects now rather than deep-copying them, so it is given a source
+    // this plane owns, and that copy is what the rebuilt plane carries.
+    const ownedSource = { ...source };
+    const origin = throughPoint(scene, ownedSource, tupleToVector3(plane.origin), plane.id);
+    return buildWorkPlane(
+      { ...plane, source: ownedSource },
+      equationFromPointNormal(origin, line.direction),
+      origin,
+    );
   }
 
   const sourcePlane = planeDataForReference(scene, source.sourcePlaneId, plane.id);
-  const origin = throughPoint(scene, source, tupleToVector3(plane.origin), plane.id);
+  const ownedPlaneSource = { ...source };
+  const owningPlane = { ...plane, source: ownedPlaneSource };
+  const origin = throughPoint(scene, ownedPlaneSource, tupleToVector3(plane.origin), plane.id);
   if (source.kind === 'parallelPlane') {
     return buildWorkPlane(
-      plane,
+      owningPlane,
       equationFromPointNormal(origin, sourcePlane.normal),
       origin,
       sourcePlane.xAxis,
     );
   }
   return buildWorkPlane(
-    plane,
+    owningPlane,
     equationFromPointNormal(origin, sourcePlane.xAxis),
     origin,
   );
@@ -661,26 +1025,100 @@ function canonicalCrossSection(scene: GeometryScene3D, section: CrossSectionEnti
   if (vertices.length < 3) {
     fail('unrecomputable_cross_section', section.id, `Cross-section "${section.id}" is empty or degenerate.`);
   }
-  if (new Set(section.pointIds).size !== section.pointIds.length || section.pointIds.length !== vertices.length) {
+  if (new Set(section.pointIds).size !== section.pointIds.length) {
     fail(
       'cross_section_topology_changed',
       section.id,
-      `Cross-section "${section.id}" changed from ${section.pointIds.length} to ${vertices.length} vertices.`,
+      `Cross-section "${section.id}" has duplicate vertex point ids.`,
     );
   }
-  const priorPoints = section.pointIds.map(pointId => requirePoint(scene, pointId, section.id, 'cross-section'));
-  const identityAlignedVertices = alignCrossSectionVertices(priorPoints, vertices, section.id);
-  section.pointIds.forEach((pointId, index) => {
+
+  // A section's shape changes as its plane travels through the solid - a cube
+  // sliced near a corner gives a triangle, through the middle a hexagon - and
+  // sliding the plane to watch exactly that is the point of the tool. This used
+  // to fail the edit whenever the vertex count changed, because each vertex
+  // carries a persistent point identity and there was no rule for matching N
+  // old identities to M new ones. The rule is now: keep the identities that
+  // still have a vertex, name any new ones deterministically from the section,
+  // and drop the surplus.
+  const topologyChanged = section.pointIds.length !== vertices.length;
+  const pointIds = reconcileCrossSectionPointIds(scene, section, vertices.length);
+
+  // Alignment rotates and reflects the recomputed loop to match the identities
+  // already on it, so a vertex keeps its point while the section merely moves.
+  // That only means something when the loop still has the same number of
+  // corners; when the count changes there is no correspondence left to
+  // preserve, and the freshly created points have no position to match on
+  // anyway.
+  const identityAlignedVertices = topologyChanged
+    ? vertices
+    : alignCrossSectionVertices(
+      pointIds.map(pointId => requirePoint(scene, pointId, section.id, 'cross-section')),
+      vertices,
+      section.id,
+    );
+  pointIds.forEach((pointId, index) => {
     const point = requirePoint(scene, pointId, section.id, 'cross-section');
     const vertex = identityAlignedVertices[index] as Vector3;
     scene.points[pointId] = { ...point, x: vertex.x, y: vertex.y, z: vertex.z };
   });
   return {
     ...section,
+    pointIds,
     vertices: identityAlignedVertices,
     area: polygonArea3D(identityAlignedVertices),
     perimeter: polygonPerimeter3D(identityAlignedVertices),
   };
+}
+
+/**
+ * Makes a section own exactly one point per vertex, adding and removing as its
+ * shape changes.
+ *
+ * <p>Ids for added vertices are derived from the section's own id and the
+ * vertex index rather than drawn from the instrument's id generator, because
+ * canonicalization has to be a pure function of the snapshot: two peers
+ * replaying the same delta must produce the same ids, and a random one would
+ * diverge them.
+ *
+ * <p>Surplus points are deleted outright. If something else still refers to one
+ * - a measurement, say - the invariant check that runs after canonicalization
+ * reports the dangling reference and the edit is rejected, which is the right
+ * outcome: a vertex that another object depends on should not vanish silently.
+ */
+function reconcileCrossSectionPointIds(
+  scene: GeometryScene3D,
+  section: CrossSectionEntity,
+  vertexCount: number,
+): string[] {
+  const kept = section.pointIds.slice(0, vertexCount);
+  for (const surplusId of section.pointIds.slice(vertexCount)) {
+    delete scene.points[surplusId];
+  }
+
+  const next = [...kept];
+  for (let index = kept.length; index < vertexCount; index += 1) {
+    let id = `${section.id}~v${index}`;
+    // A section that grew, shrank and grew again can find its deterministic
+    // name already taken by an unrelated record; walk to the first free one so
+    // the result stays deterministic without ever colliding.
+    let suffix = 0;
+    while (scene.points[id] !== undefined || next.includes(id)) {
+      suffix += 1;
+      id = `${section.id}~v${index}_${suffix}`;
+    }
+    scene.points[id] = {
+      id,
+      kind: 'point3d',
+      x: 0,
+      y: 0,
+      z: 0,
+      hidden: true,
+      locked: true,
+    };
+    next.push(id);
+  }
+  return next;
 }
 
 /**
@@ -843,32 +1281,39 @@ function canonicalizeNets(scene: GeometryScene3D): void {
   }
 }
 
+/**
+ * The solid laid out flat, its faces joined along the edges they share.
+ *
+ * <p>This used to project each face on its own and set them out in a row with a
+ * gap between them, which is a contact sheet rather than a net: nothing touched
+ * anything, so there were no hinges and nothing to fold. See `nets.ts` for the
+ * unfolding, which is also what the fold is built on - one arrangement, so the
+ * flat shape and the folding shape cannot disagree.
+ */
 function canonicalNet(scene: GeometryScene3D, net: SolidNet3D, solid: SolidEntity): SolidNet3D {
-  const faces: SolidNetFace2D[] = [];
-  let cursorX = 0;
-  for (const face of solid.faces ?? []) {
-    const points = face.pointIds.map(pointId => requirePoint(scene, pointId, net.id, `net face ${face.id}`));
-    if (points.length < 3) {
-      fail('unrecomputable_net', net.id, `Net "${net.id}" has a degenerate source face "${face.id}".`);
-    }
-    const projected = projectFaceTo2D(points);
-    let minX = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    for (const point of projected) {
-      minX = Math.min(minX, point.x);
-      maxX = Math.max(maxX, point.x);
-      minY = Math.min(minY, point.y);
-    }
-    const vertices = projected.map(point => ({ x: point.x - minX + cursorX, y: point.y - minY }));
-    cursorX += maxX - minX + 0.5;
-    faces.push({
-      id: `${net.id}-${face.id}`,
-      sourceFaceId: face.id,
-      vertices,
-      area: face.area ?? polygonArea3D(points),
-    });
+  let unfolded;
+  try {
+    unfolded = unfoldSolidNet(solid, scene.points);
+  } catch (error) {
+    fail(
+      'unrecomputable_net',
+      net.id,
+      error instanceof Error ? error.message : `Net "${net.id}" could not be unfolded.`,
+    );
+    throw error;
   }
+
+  const faces: SolidNetFace2D[] = unfolded.faces.map((placement) => {
+    const source = (solid.faces ?? []).find(face => face.id === placement.faceId);
+    const points = (source?.pointIds ?? []).map(pointId =>
+      requirePoint(scene, pointId, net.id, `net face ${placement.faceId}`));
+    return {
+      id: `${net.id}-${placement.faceId}`,
+      sourceFaceId: placement.faceId,
+      vertices: placement.vertices.map(vertex => ({ x: vertex.x, y: vertex.y })),
+      area: source?.area ?? polygonArea3D(points),
+    };
+  });
   if (!faces.length) fail('unrecomputable_net', net.id, `Net "${net.id}" has no source faces.`);
   return {
     ...net,
@@ -935,6 +1380,87 @@ function canonicalMeasurement(scene: GeometryScene3D, measurement: Measurement3D
     };
   }
 
+  if (source.kind === 'pointPointDistance') {
+    requireMeasurementKind(measurement, 'length');
+    const first = requireMeasurementPoint(scene, source.firstPointId, measurement.id);
+    const second = requireMeasurementPoint(scene, source.secondPointId, measurement.id);
+    return {
+      ...measurement,
+      targetId: source.firstPointId,
+      targetIds: [source.firstPointId, source.secondPointId],
+      value: length3(subtract3(second, first)),
+      unit: 'u',
+    };
+  }
+
+  if (source.kind === 'pointLineDistance') {
+    requireMeasurementKind(measurement, 'length');
+    const point = requireMeasurementPoint(scene, source.pointId, measurement.id);
+    const line = measurementLine(scene, source.lineEntityId, measurement.id);
+    // The rejection of the offset onto the line: |(p - a) x d| / |d|.
+    const offset = subtract3(point, line.point);
+    const cross = cross3(offset, line.direction);
+    return {
+      ...measurement,
+      targetId: source.pointId,
+      targetIds: [source.pointId, source.lineEntityId],
+      value: length3(cross) / length3(line.direction),
+      unit: 'u',
+    };
+  }
+
+  if (source.kind === 'lineLineAngle') {
+    requireMeasurementKind(measurement, 'angle');
+    const first = measurementLine(scene, source.firstLineId, measurement.id);
+    const second = measurementLine(scene, source.secondLineId, measurement.id);
+    return {
+      ...measurement,
+      targetId: source.firstLineId,
+      targetIds: [source.firstLineId, source.secondLineId],
+      // Undirected: a line has no preferred direction, so the answer is the
+      // acute angle between them and never reflex.
+      value: radiansToDegrees(Math.acos(clamp(Math.abs(cosineBetween(first.direction, second.direction)), 0, 1))),
+      unit: 'deg',
+    };
+  }
+
+  if (source.kind === 'linePlaneAngle') {
+    requireMeasurementKind(measurement, 'angle');
+    const line = measurementLine(scene, source.lineEntityId, measurement.id);
+    const plane = planeDataForMeasurement(scene, source.planeId, measurement.id);
+    // Measured from the plane, not from its normal, which is why this is the
+    // complement of the angle the dot product gives directly.
+    const sine = Math.abs(cosineBetween(line.direction, plane.normal));
+    return {
+      ...measurement,
+      targetId: source.lineEntityId,
+      targetIds: [source.lineEntityId, source.planeId],
+      value: radiansToDegrees(Math.asin(clamp(sine, 0, 1))),
+      unit: 'deg',
+    };
+  }
+
+  if (source.kind === 'lineLineDistance') {
+    requireMeasurementKind(measurement, 'length');
+    const first = measurementLine(scene, source.firstLineId, measurement.id);
+    const second = measurementLine(scene, source.secondLineId, measurement.id);
+    const between = subtract3(second.point, first.point);
+    const cross = cross3(first.direction, second.direction);
+    const crossLength = length3(cross);
+    // Parallel lines have no common perpendicular, so the distance is measured
+    // from any point of one to the other line instead.
+    const value = crossLength <= EPSILON
+      ? length3(cross3(between, first.direction)) / length3(first.direction)
+      : Math.abs(dot3(between, cross)) / crossLength;
+    return {
+      ...measurement,
+      targetId: source.firstLineId,
+      targetIds: [source.firstLineId, source.secondLineId],
+      value,
+      unit: 'u',
+    };
+  }
+
   const solid = scene.entities[source.solidId];
   if (!solid || solid.kind !== 'solid') {
     fail('unrecomputable_measurement', measurement.id, `Measurement "${measurement.id}" references missing solid "${source.solidId}".`);
@@ -967,6 +1493,42 @@ function canonicalMeasurement(scene: GeometryScene3D, measurement: Measurement3D
     value,
     unit: 'deg',
   };
+}
+
+/** Rejects a measurement whose declared kind does not match what its source computes. */
+function requireMeasurementKind(measurement: Measurement3D, expected: Measurement3D['kind']): void {
+  if (measurement.kind !== expected) {
+    fail(
+      'unrecomputable_measurement',
+      measurement.id,
+      `Measurement "${measurement.id}" has an incompatible source kind.`,
+    );
+  }
+}
+
+/** Resolves a line-like entity for a measurement, failing with the measurement's own id. */
+function measurementLine(
+  scene: GeometryScene3D,
+  entityId: string,
+  measurementId: string,
+): { point: GeometryPoint3D; direction: Vector3 } {
+  const entity = scene.entities[entityId];
+  if (!entity || (entity.kind !== 'line' && entity.kind !== 'segment' && entity.kind !== 'ray' && entity.kind !== 'vector')) {
+    fail('unrecomputable_measurement', measurementId, `Measurement "${measurementId}" references invalid line "${entityId}".`);
+  }
+  const first = requireMeasurementPoint(scene, entity.pointIds[0], measurementId);
+  const second = requireMeasurementPoint(scene, entity.pointIds[1], measurementId);
+  const direction = subtract3(second, first);
+  if (length3(direction) <= linearTolerance3D([first, second])) {
+    fail('unrecomputable_measurement', measurementId, `Line "${entityId}" has coincident source points.`);
+  }
+  return { point: first, direction };
+}
+
+/** Cosine of the angle between two vectors, or zero when either is degenerate. */
+function cosineBetween(first: Vector3, second: Vector3): number {
+  const magnitude = length3(first) * length3(second);
+  return magnitude <= EPSILON ? 0 : dot3(first, second) / magnitude;
 }
 
 function planeDataForMeasurement(scene: GeometryScene3D, planeId: string, measurementId: string): PlaneData3D {
@@ -1183,6 +1745,10 @@ function equationNormal(equation: GeometryPlaneEquation3D): Vector3 {
   return { x: equation.a, y: equation.b, z: equation.c };
 }
 
+function add3(first: Vector3, second: Vector3): Vector3 {
+  return { x: first.x + second.x, y: first.y + second.y, z: first.z + second.z };
+}
+
 function subtract3(first: Vector3, second: Vector3): Vector3 {
   return { x: first.x - second.x, y: first.y - second.y, z: first.z - second.z };
 }
@@ -1232,41 +1798,65 @@ function radiansToDegrees(radians: number): number {
   return (radians * 180) / Math.PI;
 }
 
+/**
+ * The working copy canonicalization mutates.
+ *
+ * <p>Owned callers get a *structural* copy: every record container is copied,
+ * so records can be added, replaced or removed freely, while the record objects
+ * themselves are shared with the input. Canonicalization never writes into a
+ * record - it replaces it - so sharing is safe, and the two places that used to
+ * write in place now own what they write.
+ *
+ * <p>This is what lets the identity caches in `schema.ts`, `complexity.ts` and
+ * `invariants.ts` actually hit. A JSON round trip made every point, entity and
+ * plane a new object on every edit, so those caches missed on everything except
+ * mesh arrays and each edit re-validated a whole scene that had not changed. It
+ * also retires the strip-clone-reattach dance that used to preserve meshes:
+ * sharing an entity keeps its mesh for free.
+ *
+ * <p>Untrusted input still takes the JSON round trip, where the copy is not an
+ * optimisation but a boundary - it is what stops a caller keeping a handle into
+ * the instrument's state.
+ */
 function cloneSnapshot(snapshot: GeometryLabSnapshot, reuseSurfaceMeshCaches: boolean): GeometryLabSnapshot {
   if (!reuseSurfaceMeshCaches) return JSON.parse(JSON.stringify(snapshot)) as GeometryLabSnapshot;
 
-  const preserved = new Map<string, { vertices: Vector3[]; faces: number[][] }>();
-  const preservedCurves = new Map<string, Vector3[]>();
-  const entities = Object.fromEntries(Object.entries(snapshot.scene.scene3d.entities).map(([id, entity]) => {
-    if (entity.kind === 'surface3d') {
-      preserved.set(id, { vertices: entity.vertices, faces: entity.faces });
-      return [id, { ...entity, vertices: [], faces: [] }];
-    }
-    if (entity.kind === 'curve3d') {
-      preservedCurves.set(id, entity.points);
-      return [id, { ...entity, points: [] }];
-    }
-    return [id, entity];
-  })) as GeometryLabSnapshot['scene']['scene3d']['entities'];
-  const withoutMeshes: GeometryLabSnapshot = {
+  const scene2d = snapshot.scene.scene2d;
+  const scene3d = snapshot.scene.scene3d;
+
+  const appState: GeometryLabSnapshot['appState'] = {
+    ...snapshot.appState,
+    view2d: { ...snapshot.appState.view2d },
+    view3d: { ...snapshot.appState.view3d },
+  };
+  // Selections are rewritten in place when a legacy edge id is migrated.
+  if (snapshot.appState.selected) {
+    appState.selected = snapshot.appState.selected.map(selection => ({ ...selection }));
+  }
+
+  return {
     ...snapshot,
+    appState,
     scene: {
       ...snapshot.scene,
-      scene3d: { ...snapshot.scene.scene3d, entities },
+      links: snapshot.scene.links.map(link => ({ ...link })),
+      scene2d: {
+        ...scene2d,
+        points: { ...scene2d.points },
+        entities: { ...scene2d.entities },
+        ...(scene2d.constraints ? { constraints: { ...scene2d.constraints } } : {}),
+        ...(scene2d.sliders ? { sliders: { ...scene2d.sliders } } : {}),
+      },
+      scene3d: {
+        ...scene3d,
+        points: { ...scene3d.points },
+        entities: { ...scene3d.entities },
+        workPlanes: { ...scene3d.workPlanes },
+        measurements: { ...scene3d.measurements },
+        nets: { ...scene3d.nets },
+      },
     },
   };
-  const next = JSON.parse(JSON.stringify(withoutMeshes)) as GeometryLabSnapshot;
-  for (const [id, mesh] of preserved) {
-    const entity = next.scene.scene3d.entities[id];
-    if (entity?.kind !== 'surface3d') continue;
-    entity.vertices = mesh.vertices;
-    entity.faces = mesh.faces;
-  }
-  for (const [id, points] of preservedCurves) {
-    const entity = next.scene.scene3d.entities[id];
-    if (entity?.kind === 'curve3d') entity.points = points;
-  }
-  return next;
 }
 
 function fail(code: GeometryLabCanonicalizationErrorCode, objectId: string, message: string): never {

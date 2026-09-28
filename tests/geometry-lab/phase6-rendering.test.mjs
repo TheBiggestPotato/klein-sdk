@@ -49,6 +49,11 @@ function render(snapshot, options = {}) {
     width: WIDTH,
     height: HEIGHT,
     includeMeasurements: false,
+    // These tests are about paint order and camera framing, and compare whole
+    // SVG strings as a proxy for both. Per-object descriptions name objects,
+    // and two figures built in different orders name theirs differently, so
+    // leaving them in would make the proxy answer a different question.
+    describeObjects: false,
     ...options,
   });
 }

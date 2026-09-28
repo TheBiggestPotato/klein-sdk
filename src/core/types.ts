@@ -87,6 +87,23 @@ export interface ExportOptions {
   background?: 'white' | 'transparent' | string;
   includeGrid?: boolean;
   includeMeasurements?: boolean;
+  /**
+   * Whether each drawn object carries its own name and description.
+   *
+   * <p>On by default. A figure exported without them is one label - "geometry
+   * scene" - to anybody who cannot see it, which is the difference between a
+   * picture and a document.
+   */
+  describeObjects?: boolean;
+  /**
+   * Whether described objects are reachable with the tab key.
+   *
+   * <p>Off by default, and deliberately: an exported figure embedded in a page
+   * would otherwise put every one of its objects in that page's tab order, and
+   * a hundred-object figure becomes a hundred stops to tab past. A mounted
+   * instrument turns it on, because there it *is* the thing being navigated.
+   */
+  focusableObjects?: boolean;
 }
 
 /** Discriminated result returned by instrument export operations. */

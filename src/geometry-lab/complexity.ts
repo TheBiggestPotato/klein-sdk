@@ -108,8 +108,20 @@ export const DEFAULT_GEOMETRY_LAB_COMPLEXITY_LIMITS: Readonly<GeometryLabComplex
   maxExportVertexReferences: 500_000,
   maxExportBytes: 16 * MEBIBYTE,
   maxHistoryEntries: 100,
-  maxHistoryBytes: 32 * MEBIBYTE,
-  maxHistoryEntryBytes: 16 * MEBIBYTE,
+  // Sized against what the instrument can actually produce rather than against
+  // a round number. The largest single history entry reachable is a sampled
+  // surface at the per-axis cap - 128x128, about 1.5 MB of JSON - so 4 MiB
+  // keeps every reachable edit undoable with room to spare, where the previous
+  // 16 MiB was ten times beyond anything the instrument could emit.
+  //
+  // The total is the memory that actually matters: 8 MiB holds roughly 19,000
+  // ordinary edits (100 drag steps on a 61-point scene measure 42 KB in total)
+  // or five surface additions at the per-entry ceiling. Mesh-heavy sessions
+  // therefore keep a shallower undo stack than they did at 32 MiB, which is the
+  // deliberate trade - undo depth degrades under memory pressure instead of the
+  // instrument holding 32 MiB of history it will almost never use.
+  maxHistoryBytes: 8 * MEBIBYTE,
+  maxHistoryEntryBytes: 4 * MEBIBYTE,
 });
 
 export type GeometryLabComplexityIssueCode =
@@ -207,8 +219,29 @@ class ComplexityCollector {
   }
 }
 
+/**
+ * Resolved profiles, keyed by the overrides object they came from.
+ *
+ * <p>Callers hold one limits object and pass it on every call - the instrument
+ * keeps exactly one - so resolving it repeatedly produced a fresh equal object
+ * each time. Returning the same object for the same overrides is what lets the
+ * subtree scan cache below compare profiles by identity, which is the cheapest
+ * possible check and cannot be fooled by two profiles that merely look alike.
+ */
+const resolvedGeometryLabLimits = new WeakMap<object, Readonly<GeometryLabComplexityLimits>>();
+
 /** Merge caller overrides with v0 defaults and reject malformed limit profiles. */
 export function resolveGeometryLabComplexityLimits(
+  overrides: Partial<GeometryLabComplexityLimits> = {},
+): Readonly<GeometryLabComplexityLimits> {
+  const memoized = isPlainRecord(overrides) ? resolvedGeometryLabLimits.get(overrides) : undefined;
+  if (memoized) return memoized;
+  const resolved = resolveGeometryLabComplexityLimitsUncached(overrides);
+  if (isPlainRecord(overrides)) resolvedGeometryLabLimits.set(overrides, resolved);
+  return resolved;
+}
+
+function resolveGeometryLabComplexityLimitsUncached(
   overrides: Partial<GeometryLabComplexityLimits> = {},
 ): Readonly<GeometryLabComplexityLimits> {
   if (!isPlainRecord(overrides)) {
@@ -835,6 +868,43 @@ function visibleRenderMetrics(value: unknown, limits: Readonly<GeometryLabComple
   return metrics;
 }
 
+/**
+ * What a subtree cost the last time it was scanned cleanly.
+ *
+ * <p>The scan is a pure function of the subtree, the depth it sits at and the
+ * limits in force, so a subtree that has not changed cannot produce a different
+ * answer. Mesh entities are the reason this exists: a sampled surface holds
+ * tens of thousands of vertex objects, it is replaced wholesale when it changes
+ * rather than edited in place, and re-walking every vertex to price an edit
+ * that moved an unrelated point was 62% of the cost of that edit.
+ *
+ * <p>Only clean subtrees are cached - one that reported an issue is re-walked,
+ * so issue paths and ordering stay exactly as they were. Entries record the
+ * limits profile they were measured under and are reused only for that same
+ * profile, and the byte and node totals are exact precisely because the subtree
+ * was clean: nothing was truncated or short-circuited while measuring it.
+ *
+ * <p>Keyed by object identity, like the graph caches in tasks 0.2 and 0.9, so a
+ * changed object is a different key. That assumes snapshots and deltas are not
+ * mutated in place after being scanned, which is how this codebase already
+ * treats them.
+ */
+interface ScannedSubtree {
+  readonly bytes: number;
+  readonly nodes: number;
+  readonly deepestRelativeDepth: number;
+  readonly limits: Readonly<GeometryLabComplexityLimits>;
+}
+
+const scannedSubtrees = new WeakMap<object, ScannedSubtree>();
+
+/**
+ * Below this a subtree is cheaper to re-walk than to remember. Vertices and
+ * small records fall under it, so the map holds meshes and other large
+ * structures rather than an entry per point.
+ */
+const MIN_CACHEABLE_SUBTREE_NODES = 64;
+
 function scanUnknownJson(
   value: unknown,
   byteLimit: number,
@@ -849,6 +919,7 @@ function scanUnknownJson(
   let bytes = 0;
   let nodeLimitReported = false;
   let byteLimitReported = false;
+  let deepest = 0;
 
   const addBytes = (amount: number, path: string): void => {
     bytes = saturatingAdd(bytes, amount, byteLimit + 1);
@@ -859,6 +930,54 @@ function scanUnknownJson(
   };
 
   const visit = (current: unknown, path: string, depth: number, role?: string): void => {
+    if (depth > deepest) deepest = depth;
+
+    // A large, unchanged subtree scanned cleanly before under this same limits
+    // profile. Reused only when its totals still fit inside every running
+    // limit; if they would not, it is re-walked so the issue is reported at the
+    // exact path the walk would have found it.
+    if (current !== null && typeof current === 'object') {
+      const cached = scannedSubtrees.get(current);
+      if (
+        cached
+        && cached.limits === limits
+        && depth + cached.deepestRelativeDepth <= limits.maxTraversalDepth
+        && nodes + cached.nodes <= limits.maxTraversalNodes
+        && bytes + cached.bytes <= byteLimit
+      ) {
+        nodes += cached.nodes;
+        bytes += cached.bytes;
+        const reachedDepth = depth + cached.deepestRelativeDepth;
+        if (reachedDepth > deepest) deepest = reachedDepth;
+        return;
+      }
+    }
+
+    const subtreeStartNodes = nodes;
+    const subtreeStartBytes = bytes;
+    const subtreeStartIssues = collector.issues.length;
+    const subtreeStartDeepest = deepest;
+
+    visitUncached(current, path, depth, role);
+
+    if (
+      current !== null
+      && typeof current === 'object'
+      && collector.issues.length === subtreeStartIssues
+      && nodes - subtreeStartNodes >= MIN_CACHEABLE_SUBTREE_NODES
+      && nodes <= limits.maxTraversalNodes
+      && bytes <= byteLimit
+    ) {
+      scannedSubtrees.set(current, {
+        bytes: bytes - subtreeStartBytes,
+        nodes: nodes - subtreeStartNodes,
+        deepestRelativeDepth: Math.max(deepest, subtreeStartDeepest) - depth,
+        limits,
+      });
+    }
+  };
+
+  const visitUncached = (current: unknown, path: string, depth: number, role?: string): void => {
     nodes += 1;
     if (nodes > limits.maxTraversalNodes) {
       if (!nodeLimitReported) {

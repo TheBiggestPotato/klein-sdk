@@ -205,9 +205,14 @@ export function reduceOwnedGeometryLabDelta(
     reducedValidation.value,
     'invalid_delta_result',
     'Geometry Lab delta produced geometry that could not be canonically recomputed.',
-    limits,
-    true,
-    rebuildEquationIds,
+    {
+      complexityLimits: limits,
+      reuseSurfaceMeshCaches: true,
+      equationEntityIds: rebuildEquationIds,
+      // The caller owns this snapshot: it was bounded before the delta, and the
+      // delta itself was bounded above.
+      inputAlreadyBounded: true,
+    },
   );
   const invariantIssues = getGeometryLabInvariantIssues(next);
   if (invariantIssues.length > 0) {
@@ -415,6 +420,88 @@ function applyGeometryLabDeltaUnchecked(
         snapshot,
         delta.ids.map(id => ({ collection: 'workPlane', id })),
       );
+    case 'addSlider2D':
+      assertGeometryLabIdAvailable(snapshot, delta.slider.id, delta.op);
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: {
+            ...snapshot.scene.scene2d,
+            sliders: { ...(snapshot.scene.scene2d.sliders ?? {}), [delta.slider.id]: delta.slider },
+          },
+        },
+      };
+    case 'updateSlider2D': {
+      const existing = snapshot.scene.scene2d.sliders?.[delta.id];
+      if (!existing) return snapshot;
+      // Clamped rather than refused: a control dragged to its end should stop
+      // there, and a value outside the range is what the schema rejects.
+      const next = { ...existing, ...delta.changes, id: existing.id };
+      next.value = Math.min(next.max, Math.max(next.min, next.value));
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: {
+            ...snapshot.scene.scene2d,
+            sliders: { ...(snapshot.scene.scene2d.sliders ?? {}), [delta.id]: next },
+          },
+        },
+      };
+    }
+    case 'addConstraint2D':
+      assertGeometryLabIdAvailable(snapshot, delta.constraint.id, delta.op);
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: {
+            ...snapshot.scene.scene2d,
+            constraints: {
+              ...(snapshot.scene.scene2d.constraints ?? {}),
+              [delta.constraint.id]: delta.constraint,
+            },
+          },
+        },
+      };
+    case 'deleteConstraint2D': {
+      const remaining = { ...(snapshot.scene.scene2d.constraints ?? {}) };
+      for (const id of delta.ids) delete remaining[id];
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: { ...snapshot.scene.scene2d, constraints: remaining },
+        },
+      };
+    }
+    case 'addMeasurement2D':
+      assertGeometryLabIdAvailable(snapshot, delta.measurement.id, delta.op);
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: {
+            ...snapshot.scene.scene2d,
+            measurements: {
+              ...(snapshot.scene.scene2d.measurements ?? {}),
+              [delta.measurement.id]: delta.measurement,
+            },
+          },
+        },
+      };
+    case 'deleteMeasurement2D': {
+      const remaining = { ...(snapshot.scene.scene2d.measurements ?? {}) };
+      for (const id of delta.ids) delete remaining[id];
+      return {
+        ...snapshot,
+        scene: {
+          ...snapshot.scene,
+          scene2d: { ...snapshot.scene.scene2d, measurements: remaining },
+        },
+      };
+    }
     case 'addMeasurement':
       assertGeometryLabIdAvailable(snapshot, delta.measurement.id, delta.op);
       return {
@@ -500,16 +587,37 @@ function applyGeometryLabDeltaUnchecked(
   }
 }
 
+interface GeometryLabBoundaryOptions {
+  complexityLimits?: Partial<GeometryLabComplexityLimits>;
+  reuseSurfaceMeshCaches?: boolean;
+  equationEntityIds?: ReadonlySet<string>;
+  /**
+   * Set when the input is known to be a bounded snapshot plus a bounded delta,
+   * which is the case on the instrument's owned path: the previous snapshot
+   * passed this same assertion, and the delta passed
+   * `assertGeometryLabDeltaComplexity`. The result is then within a constant
+   * factor of the limit, so canonicalization cannot run away before the
+   * post-assertion below enforces the real bound. Skipping the pre-assertion
+   * saves a full traversal of the whole snapshot on every single edit.
+   *
+   * <p>The post-assertion is never skipped. It is the boundary that actually
+   * holds the limit, and dropping it would let a scene grow past the cap one
+   * bounded delta at a time.
+   */
+  inputAlreadyBounded?: boolean;
+}
+
 function canonicalizeGeometryLabBoundary(
   snapshot: GeometryLabSnapshot,
   code: 'invalid_snapshot' | 'invalid_initial_snapshot' | 'invalid_delta_result',
   message: string,
-  complexityLimits: Partial<GeometryLabComplexityLimits> = {},
-  reuseSurfaceMeshCaches = false,
-  equationEntityIds?: ReadonlySet<string>,
+  options: GeometryLabBoundaryOptions = {},
 ): GeometryLabSnapshot {
+  const { complexityLimits = {}, reuseSurfaceMeshCaches = false, equationEntityIds } = options;
   try {
-    assertGeometryLabSnapshotComplexity(snapshot, complexityLimits);
+    if (!options.inputAlreadyBounded) {
+      assertGeometryLabSnapshotComplexity(snapshot, complexityLimits);
+    }
     const canonical = canonicalizeEquationSurfaceCaches(
       canonicalizeGeometryLabSnapshotBase(snapshot, { reuseSurfaceMeshCaches }),
       equationEntityIds,
@@ -588,6 +696,7 @@ function clearGeometryLabScope(
     addTargets('point2d', Object.keys(snapshot.scene.scene2d.points));
     addTargets('entity2d', Object.keys(snapshot.scene.scene2d.entities));
     addTargets('constraint2d', Object.keys(snapshot.scene.scene2d.constraints ?? {}));
+    addTargets('measurement2d', Object.keys(snapshot.scene.scene2d.measurements ?? {}));
   }
   if (scope === '3d' || scope === 'all') {
     addTargets('point3d', Object.keys(snapshot.scene.scene3d.points));
@@ -638,6 +747,8 @@ function deleteGeometryLabIds(
   const scene2dPoints = { ...snapshot.scene.scene2d.points };
   const scene2dEntities = { ...snapshot.scene.scene2d.entities };
   const scene2dConstraints = { ...(snapshot.scene.scene2d.constraints ?? {}) };
+  const scene2dSliders = { ...(snapshot.scene.scene2d.sliders ?? {}) };
+  const scene2dMeasurements = { ...(snapshot.scene.scene2d.measurements ?? {}) };
   const scene3dPoints = { ...snapshot.scene.scene3d.points };
   const scene3dEntities = { ...snapshot.scene.scene3d.entities };
   const workPlanes = { ...snapshot.scene.scene3d.workPlanes };
@@ -649,6 +760,8 @@ function deleteGeometryLabIds(
       case 'point2d': delete scene2dPoints[ref.id]; break;
       case 'entity2d': delete scene2dEntities[ref.id]; break;
       case 'constraint2d': delete scene2dConstraints[ref.id]; break;
+      case 'slider2d': delete scene2dSliders[ref.id]; break;
+      case 'measurement2d': delete scene2dMeasurements[ref.id]; break;
       case 'point3d': delete scene3dPoints[ref.id]; break;
       case 'entity3d': delete scene3dEntities[ref.id]; break;
       case 'workPlane': delete workPlanes[ref.id]; break;
@@ -683,6 +796,12 @@ function deleteGeometryLabIds(
         points: scene2dPoints,
         entities: scene2dEntities,
         constraints: scene2dConstraints,
+        // Carried only when the scene already had the collection. It is
+        // optional so that snapshots written before 2D measurements existed
+        // keep their exact shape, and introducing an empty one here would
+        // change the serialized form of every 2D scene that has none.
+        ...(snapshot.scene.scene2d.measurements ? { measurements: scene2dMeasurements } : {}),
+        ...(snapshot.scene.scene2d.sliders ? { sliders: scene2dSliders } : {}),
       },
       scene3d: {
         ...snapshot.scene.scene3d,

@@ -1,3 +1,4 @@
+export * from './linking.js';
 export {
   createTeamsManifestTemplate,
   createTeamsTabUrl,

@@ -87,9 +87,14 @@ const GEOMETRY_CONSTRUCTION_KINDS: Record<GeometryConstruction['kind'], true> = 
   circleThroughPoints: true,
   parallelLine: true,
   perpendicularLine: true,
+  dynamicLocus: true,
+  pointOnPath: true,
   tangentLine: true,
   angleBisector: true,
   angleFromLines: true,
+  transformedPoint: true,
+  linePlaneIntersection: true,
+  planePlaneIntersection: true,
   custom: true,
 };
 
@@ -120,6 +125,12 @@ const DELTA_OPS: Record<GeometryLabDelta['op'], true> = {
   addWorkPlane: true,
   updateWorkPlane: true,
   deleteWorkPlane: true,
+  addConstraint2D: true,
+  addSlider2D: true,
+  updateSlider2D: true,
+  deleteConstraint2D: true,
+  addMeasurement2D: true,
+  deleteMeasurement2D: true,
   addMeasurement: true,
   updateMeasurement: true,
   deleteMeasurement: true,
@@ -156,9 +167,11 @@ const COMMAND_TYPES: Record<GeometryLabCommand['type'], true> = {
 };
 
 const RECORD_HISTORY_COLLECTIONS = new Set([
+  'slider2d',
   'point2d',
   'entity2d',
   'constraint2d',
+  'measurement2d',
   'point3d',
   'entity3d',
   'workPlane',
@@ -236,6 +249,7 @@ function validateSnapshotRecordIds(snapshot: UnknownRecord, context: ValidationC
     ['scene.scene2d.points', scene2d?.points],
     ['scene.scene2d.entities', scene2d?.entities],
     ['scene.scene2d.constraints', scene2d?.constraints],
+    ['scene.scene2d.sliders', scene2d?.sliders],
     ['scene.scene3d.points', scene3d?.points],
     ['scene.scene3d.entities', scene3d?.entities],
     ['scene.scene3d.workPlanes', scene3d?.workPlanes],
@@ -275,12 +289,14 @@ function validateScene(value: unknown, path: string, context: ValidationContext)
 }
 
 function validateScene2D(value: unknown, path: string, context: ValidationContext): void {
-  const record = exactRecord(value, path, context, ['kind', 'points', 'entities', 'constraints']);
+  const record = exactRecord(value, path, context, ['kind', 'points', 'entities', 'constraints', 'measurements', 'sliders']);
   if (!record) return;
   required(record, 'kind', path, context, (item, itemPath, itemContext) => literal(item, itemPath, itemContext, 'geometry-lab-2d'));
   required(record, 'points', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validatePoint2D));
   required(record, 'entities', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateGeometryEntity));
   optional(record, 'constraints', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateGeometryConstraint));
+  optional(record, 'sliders', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateGeometrySlider));
+  optional(record, 'measurements', path, context, (item, itemPath, itemContext) => recordMap(item, itemPath, itemContext, validateMeasurement2D));
 }
 
 function validateScene3D(value: unknown, path: string, context: ValidationContext): void {
@@ -408,10 +424,35 @@ function validateConstruction(value: unknown, path: string, context: ValidationC
   } else if (kind === 'circumcenter' || kind === 'circleThroughPoints' || kind === 'angleBisector') {
     rejectUnknown(record, path, context, ['kind', 'pointIds']);
     required(record, 'pointIds', path, context, idTupleValidator(3));
+  } else if (kind === 'dynamicLocus') {
+    rejectUnknown(record, path, context, ['kind', 'sliderId', 'tracerId', 'samples']);
+    required(record, 'sliderId', path, context, nonEmptyString);
+    required(record, 'tracerId', path, context, nonEmptyString);
+    required(record, 'samples', path, context, nonNegativeInteger);
+  } else if (kind === 'pointOnPath') {
+    rejectUnknown(record, path, context, ['kind', 'entityId', 'at', 'sliderId']);
+    required(record, 'entityId', path, context, nonEmptyString);
+    required(record, 'at', path, context, finiteNumber);
+    optional(record, 'sliderId', path, context, nonEmptyString);
   } else if (kind === 'parallelLine' || kind === 'perpendicularLine') {
     rejectUnknown(record, path, context, ['kind', 'sourceLineId', 'throughPointId']);
     required(record, 'sourceLineId', path, context, nonEmptyString);
     required(record, 'throughPointId', path, context, nonEmptyString);
+  } else if (kind === 'transformedPoint') {
+    rejectUnknown(record, path, context, ['kind', 'sourceId', 'transform']);
+    required(record, 'sourceId', path, context, nonEmptyString);
+    required(record, 'transform', path, context, validateGeometryTransform2D);
+  } else if (kind === 'linePlaneIntersection') {
+    rejectUnknown(record, path, context, ['kind', 'lineEntityId', 'planeId']);
+    required(record, 'lineEntityId', path, context, nonEmptyString);
+    required(record, 'planeId', path, context, nonEmptyString);
+  } else if (kind === 'planePlaneIntersection') {
+    rejectUnknown(record, path, context, ['kind', 'firstPlaneId', 'secondPlaneId', 'end']);
+    required(record, 'firstPlaneId', path, context, nonEmptyString);
+    required(record, 'secondPlaneId', path, context, nonEmptyString);
+    // Two planes meet in a line, which the model stores as two constructed
+    // endpoints; `end` says which of them this point is.
+    required(record, 'end', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, [0, 1]));
   } else if (kind === 'tangentLine') {
     rejectUnknown(record, path, context, ['kind', 'circleId', 'throughPointId', 'branch']);
     required(record, 'circleId', path, context, nonEmptyString);
@@ -421,6 +462,37 @@ function validateConstruction(value: unknown, path: string, context: ValidationC
     rejectUnknown(record, path, context, ['kind', 'sourceIds', 'label']);
     required(record, 'sourceIds', path, context, idArrayValidator());
     optional(record, 'label', path, context, stringValue);
+  }
+}
+
+/**
+ * A slider is a number with a range, so the range has to make sense: a maximum
+ * below its minimum describes no sweep at all, and a value outside them is a
+ * figure showing a configuration its own control cannot reach.
+ */
+function validateGeometrySlider(value: unknown, path: string, context: ValidationContext): void {
+  const record = exactRecord(value, path, context, ['id', 'name', 'value', 'min', 'max', 'step', 'label', 'color', 'hidden']);
+  if (!record) return;
+  required(record, 'id', path, context, nonEmptyString);
+  required(record, 'name', path, context, nonEmptyString);
+  required(record, 'value', path, context, finiteNumber);
+  required(record, 'min', path, context, finiteNumber);
+  required(record, 'max', path, context, finiteNumber);
+  required(record, 'step', path, context, finiteNumber);
+  optional(record, 'label', path, context, nonEmptyString);
+  optional(record, 'color', path, context, nonEmptyString);
+  optional(record, 'hidden', path, context, booleanValue);
+  const min = record.min;
+  const max = record.max;
+  const current = record.value;
+  if (typeof min !== 'number' || typeof max !== 'number' || typeof current !== 'number') return;
+  if (max < min) {
+    context.issues.push({ path: `${path}.max`, message: 'A slider maximum cannot be below its minimum.' });
+  } else if (current < min || current > max) {
+    context.issues.push({ path: `${path}.value`, message: 'A slider value has to be inside its own range.' });
+  }
+  if (typeof record.step === 'number' && record.step < 0) {
+    context.issues.push({ path: `${path}.step`, message: 'A slider step cannot be negative.' });
   }
 }
 
@@ -641,7 +713,7 @@ function validateSurface(value: unknown, path: string, context: ValidationContex
   if (!record) return;
   required(record, 'id', path, context, nonEmptyString);
   required(record, 'kind', path, context, (item, itemPath, itemContext) => literal(item, itemPath, itemContext, 'surface3d'));
-  required(record, 'surfaceKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['z-function', 'parametric', 'equation']));
+  required(record, 'surfaceKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['z-function', 'parametric', 'equation', 'implicit']));
   optional(record, 'dependentAxis', path, context, validateAxis);
   required(record, 'vertices', path, context, vector3Array);
   required(record, 'faces', path, context, faceIndexArray);
@@ -750,6 +822,121 @@ function validateWorkPlaneThrough(record: UnknownRecord, path: string, context: 
   }
 }
 
+function validateGeometryTransform2D(value: unknown, path: string, context: ValidationContext): void {
+  const record = plainRecord(value, path, context);
+  if (!record) return;
+  if (record.kind === 'translate') {
+    rejectUnknown(record, path, context, ['kind', 'vectorEntityId']);
+    required(record, 'vectorEntityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'translateBy') {
+    rejectUnknown(record, path, context, ['kind', 'dx', 'dy']);
+    required(record, 'dx', path, context, finiteNumber);
+    required(record, 'dy', path, context, finiteNumber);
+    return;
+  }
+  if (record.kind === 'rotate') {
+    rejectUnknown(record, path, context, ['kind', 'centerPointId', 'degrees']);
+    required(record, 'centerPointId', path, context, nonEmptyString);
+    required(record, 'degrees', path, context, finiteNumber);
+    return;
+  }
+  if (record.kind === 'reflectLine') {
+    rejectUnknown(record, path, context, ['kind', 'lineEntityId']);
+    required(record, 'lineEntityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'reflectPoint') {
+    rejectUnknown(record, path, context, ['kind', 'centerPointId']);
+    required(record, 'centerPointId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'dilate') {
+    rejectUnknown(record, path, context, ['kind', 'centerPointId', 'factor']);
+    required(record, 'centerPointId', path, context, nonEmptyString);
+    // Zero would collapse every image onto the centre, which is not a dilation.
+    required(record, 'factor', path, context, (item, itemPath, itemContext) => {
+      finiteNumber(item, itemPath, itemContext);
+      if (item === 0) issue(itemContext, itemPath, 'A dilation factor cannot be zero.');
+    });
+    return;
+  }
+  issue(context, childPath(path, 'kind'), `Unknown transformation kind ${quoted(record.kind)}.`);
+}
+
+function validateMeasurement2D(value: unknown, path: string, context: ValidationContext): void {
+  const record = exactRecord(value, path, context, ['id', 'kind', 'value', 'unit', 'label', 'color', 'hidden', 'targetIds', 'source', 'exact']);
+  if (!record) return;
+  required(record, 'id', path, context, nonEmptyString);
+  required(record, 'kind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['length', 'area', 'angle']));
+  required(record, 'value', path, context, finiteNumber);
+  optional(record, 'unit', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['u', 'u^2', 'deg']));
+  optional(record, 'label', path, context, stringValue);
+  optional(record, 'color', path, context, stringValue);
+  optional(record, 'hidden', path, context, booleanValue);
+  optional(record, 'targetIds', path, context, (item, itemPath, itemContext) => array(item, itemPath, itemContext, nonEmptyString));
+  required(record, 'source', path, context, validateMeasurementSource2D);
+  optional(record, 'exact', path, context, validateExactValue);
+}
+
+/**
+ * An exact value is derived, so a stored one is only ever a cached answer - but
+ * a malformed one would be read as a real number and shown to a student, so its
+ * shape is checked like anything else that arrives from outside.
+ */
+function validateExactValue(value: unknown, path: string, context: ValidationContext): void {
+  const record = exactRecord(value, path, context, ['terms']);
+  if (!record) return;
+  required(record, 'terms', path, context, (item, itemPath, itemContext) => array(item, itemPath, itemContext, (term, termPath, termContext) => {
+    const parts = exactRecord(term, termPath, termContext, ['numerator', 'denominator', 'radicand']);
+    if (!parts) return;
+    required(parts, 'numerator', termPath, termContext, safeInteger);
+    required(parts, 'denominator', termPath, termContext, positiveSafeInteger);
+    required(parts, 'radicand', termPath, termContext, positiveSafeInteger);
+  }));
+}
+
+function safeInteger(value: unknown, path: string, context: ValidationContext): void {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+    context.issues.push({ path, message: 'Expected an integer that can be held exactly.' });
+  }
+}
+
+function positiveSafeInteger(value: unknown, path: string, context: ValidationContext): void {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    context.issues.push({ path, message: 'Expected a positive integer that can be held exactly.' });
+  }
+}
+
+function validateMeasurementSource2D(value: unknown, path: string, context: ValidationContext): void {
+  const record = plainRecord(value, path, context);
+  if (!record) return;
+  if (record.kind === 'pointDistance') {
+    rejectUnknown(record, path, context, ['kind', 'firstPointId', 'secondPointId']);
+    required(record, 'firstPointId', path, context, nonEmptyString);
+    required(record, 'secondPointId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'segmentLength' || record.kind === 'polygonArea' || record.kind === 'polygonPerimeter') {
+    rejectUnknown(record, path, context, ['kind', 'entityId']);
+    required(record, 'entityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'pointLineDistance') {
+    rejectUnknown(record, path, context, ['kind', 'pointId', 'entityId']);
+    required(record, 'pointId', path, context, nonEmptyString);
+    required(record, 'entityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'angle') {
+    rejectUnknown(record, path, context, ['kind', 'pointIds']);
+    required(record, 'pointIds', path, context, idTupleValidator(3));
+    return;
+  }
+  issue(context, childPath(path, 'kind'), `Unknown 2D measurement source kind ${quoted(record.kind)}.`);
+}
+
 function validateMeasurement(value: unknown, path: string, context: ValidationContext): void {
   const record = exactRecord(value, path, context, ['id', 'targetId', 'targetIds', 'kind', 'value', 'unit', 'label', 'source']);
   if (!record) return;
@@ -782,6 +969,30 @@ function validateMeasurementSource(value: unknown, path: string, context: Valida
     required(record, 'solidId', path, context, nonEmptyString);
     required(record, 'firstFaceId', path, context, nonEmptyString);
     required(record, 'secondFaceId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'pointPointDistance') {
+    rejectUnknown(record, path, context, ['kind', 'firstPointId', 'secondPointId']);
+    required(record, 'firstPointId', path, context, nonEmptyString);
+    required(record, 'secondPointId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'pointLineDistance') {
+    rejectUnknown(record, path, context, ['kind', 'pointId', 'lineEntityId']);
+    required(record, 'pointId', path, context, nonEmptyString);
+    required(record, 'lineEntityId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'lineLineAngle' || record.kind === 'lineLineDistance') {
+    rejectUnknown(record, path, context, ['kind', 'firstLineId', 'secondLineId']);
+    required(record, 'firstLineId', path, context, nonEmptyString);
+    required(record, 'secondLineId', path, context, nonEmptyString);
+    return;
+  }
+  if (record.kind === 'linePlaneAngle') {
+    rejectUnknown(record, path, context, ['kind', 'lineEntityId', 'planeId']);
+    required(record, 'lineEntityId', path, context, nonEmptyString);
+    required(record, 'planeId', path, context, nonEmptyString);
     return;
   }
   issue(context, childPath(path, 'kind'), `Unknown measurement source kind ${quoted(record.kind)}.`);
@@ -847,7 +1058,26 @@ function validateDeltaValue(value: unknown, path: string, context: ValidationCon
   else if (op === 'updateEntity') validateIdAndChanges(record, path, context, validateEntityChanges);
   else if (op === 'addWorkPlane') validateOpPayload(record, path, context, 'plane', validateWorkPlane);
   else if (op === 'updateWorkPlane') validateIdAndChanges(record, path, context, validateWorkPlaneChanges);
-  else if (op === 'deleteWorkPlane' || op === 'deleteMeasurement' || op === 'deleteNet' || op === 'delete') validateIdsOp(record, path, context);
+  else if (op === 'deleteWorkPlane' || op === 'deleteMeasurement' || op === 'deleteMeasurement2D' || op === 'deleteConstraint2D' || op === 'deleteNet' || op === 'delete') validateIdsOp(record, path, context);
+  else if (op === 'addMeasurement2D') validateOpPayload(record, path, context, 'measurement', validateMeasurement2D);
+  else if (op === 'addConstraint2D') validateOpPayload(record, path, context, 'constraint', validateGeometryConstraint);
+  else if (op === 'addSlider2D') validateOpPayload(record, path, context, 'slider', validateGeometrySlider);
+  else if (op === 'updateSlider2D') {
+    rejectUnknown(record, path, context, ['op', 'id', 'changes']);
+    required(record, 'id', path, context, nonEmptyString);
+    required(record, 'changes', path, context, (item, itemPath, itemContext) => {
+      const changes = exactRecord(item, itemPath, itemContext, ['name', 'value', 'min', 'max', 'step', 'label', 'color', 'hidden']);
+      if (!changes) return;
+      optional(changes, 'name', itemPath, itemContext, nonEmptyString);
+      optional(changes, 'value', itemPath, itemContext, finiteNumber);
+      optional(changes, 'min', itemPath, itemContext, finiteNumber);
+      optional(changes, 'max', itemPath, itemContext, finiteNumber);
+      optional(changes, 'step', itemPath, itemContext, finiteNumber);
+      optional(changes, 'label', itemPath, itemContext, nonEmptyString);
+      optional(changes, 'color', itemPath, itemContext, nonEmptyString);
+      optional(changes, 'hidden', itemPath, itemContext, booleanValue);
+    });
+  }
   else if (op === 'addMeasurement') validateOpPayload(record, path, context, 'measurement', validateMeasurement);
   else if (op === 'updateMeasurement') validateIdAndChanges(record, path, context, validateMeasurementChanges);
   else if (op === 'addNet') validateOpPayload(record, path, context, 'net', validateNet);
@@ -912,7 +1142,7 @@ function validateEntityChanges(value: unknown, path: string, context: Validation
   optional(record, 'faceIds', path, context, idArrayValidator());
   optional(record, 'targetIds', path, context, idArrayValidator());
   optional(record, 'dependentAxis', path, context, validateAxis);
-  optional(record, 'surfaceKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['z-function', 'parametric', 'equation']));
+  optional(record, 'surfaceKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['z-function', 'parametric', 'equation', 'implicit']));
   optional(record, 'solid', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['cube', 'cuboid', 'tetrahedron', 'prism', 'pyramid', 'cylinder', 'cone', 'sphere', 'hemisphere', 'polyhedron']));
   optional(record, 'conicKind', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['ellipse', 'parabola', 'hyperbola']));
   optional(record, 'orientation', path, context, (item, itemPath, itemContext) => oneOf(item, itemPath, itemContext, ['interior', 'exterior']));
@@ -1266,12 +1496,53 @@ function vector2Array(value: unknown, path: string, context: ValidationContext):
   array(value, path, context, vector2Object);
 }
 
-function vector3Array(value: unknown, path: string, context: ValidationContext): void {
+/**
+ * Mesh arrays that already validated cleanly.
+ *
+ * <p>Keyed on the array rather than on the entity holding it, because the array
+ * is what survives an edit. Canonicalization rebuilds every entity object each
+ * delta - it strips the meshes, clones the rest, and reattaches the original
+ * arrays by reference - so an entity-keyed cache never hits, while the vertex
+ * and face arrays inside it are the very same objects as before. Those arrays
+ * are also the only part big enough to be worth remembering.
+ */
+const cleanlyValidatedMeshArrays = new WeakMap<object, Set<ValueValidator>>();
+
+function cachedArrayValidation(
+  value: unknown,
+  path: string,
+  context: ValidationContext,
+  validator: ValueValidator,
+): void {
+  if (value === null || typeof value !== 'object') {
+    validator(value, path, context);
+    return;
+  }
+  const passed = cleanlyValidatedMeshArrays.get(value as object);
+  if (passed?.has(validator)) return;
+
+  const issuesBefore = context.issues.length;
+  validator(value, path, context);
+  if (context.issues.length !== issuesBefore) return;
+
+  if (passed) passed.add(validator);
+  else cleanlyValidatedMeshArrays.set(value as object, new Set([validator]));
+}
+
+function vector3ArrayUncached(value: unknown, path: string, context: ValidationContext): void {
   array(value, path, context, vector3Object);
 }
 
-function faceIndexArray(value: unknown, path: string, context: ValidationContext): void {
+function vector3Array(value: unknown, path: string, context: ValidationContext): void {
+  cachedArrayValidation(value, path, context, vector3ArrayUncached);
+}
+
+function faceIndexArrayUncached(value: unknown, path: string, context: ValidationContext): void {
   array(value, path, context, (face, facePath, faceContext) => array(face, facePath, faceContext, nonNegativeInteger));
+}
+
+function faceIndexArray(value: unknown, path: string, context: ValidationContext): void {
+  cachedArrayValidation(value, path, context, faceIndexArrayUncached);
 }
 
 function increasingRange(value: unknown, path: string, context: ValidationContext): void {
@@ -1378,13 +1649,46 @@ function nonEmptyArray(value: unknown, path: string, context: ValidationContext,
   if (Array.isArray(value) && value.length === 0) issue(context, path, 'Expected at least one item.');
 }
 
+/**
+ * Records that already passed a given validator, cleanly.
+ *
+ * <p>Validation is a pure check - the value comes back untouched and only
+ * issues are collected - so a record object that satisfied a validator once
+ * satisfies it forever, unless it changes, and a changed record is a different
+ * object under the reducer's copy-on-write. Path and issue budget influence
+ * only what a *failing* validation reports, so caching successes alone leaves
+ * every failure reported exactly as before.
+ *
+ * <p>This exists for the same reason as the scan cache in `complexity.ts`: a
+ * single sampled surface holds tens of thousands of vertex objects, and
+ * revalidating all of them to price an edit that moved an unrelated point was
+ * most of that edit.
+ */
+const cleanlyValidatedRecords = new WeakMap<object, Set<ValueValidator>>();
+
 function recordMap(value: unknown, path: string, context: ValidationContext, validator: ValueValidator): void {
   const record = plainRecord(value, path, context);
   if (!record) return;
   for (const [key, item] of Object.entries(record)) {
     if (key.length === 0) issue(context, recordPath(path, key), 'Record keys must be non-empty.');
     const itemPath = recordPath(path, key);
-    validator(item, itemPath, context);
+
+    const cacheable = item !== null && typeof item === 'object';
+    const passed = cacheable ? cleanlyValidatedRecords.get(item as object) : undefined;
+    if (passed?.has(validator)) {
+      // Already known good against this exact validator.
+    } else {
+      const issuesBefore = context.issues.length;
+      validator(item, itemPath, context);
+      if (cacheable && context.issues.length === issuesBefore) {
+        if (passed) passed.add(validator);
+        else cleanlyValidatedRecords.set(item as object, new Set([validator]));
+      }
+    }
+
+    // Deliberately outside the cache: this compares the record against the key
+    // it is filed under, so it depends on where the record sits and not only on
+    // the record itself.
     if (isPlainRecord(item) && typeof item.id === 'string' && item.id !== key) {
       issue(context, childPath(itemPath, 'id'), `Expected record id "${item.id}" to match key "${key}".`);
     }

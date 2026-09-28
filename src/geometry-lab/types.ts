@@ -9,8 +9,12 @@ import type {
   Vector3,
   View2D,
 } from '../core/index.js';
+import type { ExactValue } from '../math/index.js';
 import type {
+  GeometryConstraint,
+  GeometrySlider,
   GeometryEntity,
+  GeometryTransform2D,
   GeometryPlaneEquation3D,
   GeometryPoint2D,
   GeometryPoint3D,
@@ -48,6 +52,50 @@ export type GeometryLabTool =
 /** 2D Geometry Lab scene; currently extends the shared geometry graph with a scene discriminator. */
 export interface GeometryScene2D extends GeometryScene {
   kind: 'geometry-lab-2d';
+  /**
+   * Measurements over the 2D figure. Optional so that every snapshot written
+   * before they existed stays valid without a migration.
+   */
+  measurements?: Record<string, Measurement2D>;
+}
+
+/**
+ * What a 2D measurement is derived from.
+ *
+ * <p>The same design as {@link MeasurementSource3D}: the source is what is
+ * stored and the value is recomputed from it, so a measurement follows the
+ * figure instead of recording what it happened to be when it was taken. These
+ * are the quantities a 2D geometry lesson asks for - how long a segment is, how
+ * far apart two points are, how far a point is from a line, the size of an
+ * angle, and a polygon's area and perimeter.
+ */
+export type MeasurementSource2D =
+  | { kind: 'pointDistance'; firstPointId: string; secondPointId: string }
+  | { kind: 'segmentLength'; entityId: string }
+  | { kind: 'pointLineDistance'; pointId: string; entityId: string }
+  | { kind: 'angle'; pointIds: [string, string, string] }
+  | { kind: 'polygonArea'; entityId: string }
+  | { kind: 'polygonPerimeter'; entityId: string };
+
+/** A recomputed measurement over the 2D scene. */
+export interface Measurement2D {
+  id: string;
+  kind: 'length' | 'area' | 'angle';
+  value: number;
+  unit?: 'u' | 'u^2' | 'deg';
+  label?: string;
+  color?: string;
+  hidden?: boolean;
+  targetIds?: string[];
+  source: MeasurementSource2D;
+  /**
+   * The value written exactly - `2√5` rather than `4.4721` - when there is one.
+   *
+   * <p>Absent means no exact form was found, which is not the same as the value
+   * being irrational: the coordinates may not have been recognisable as
+   * fractions, or an intermediate may have run past what an integer holds here.
+   */
+  exact?: ExactValue;
 }
 
 /** 3D Geometry Lab scene content. Camera state stays in app state, not here. */
@@ -70,6 +118,37 @@ export interface GeometryLabStyleOptions {
   hidden?: boolean;
   locked?: boolean;
 }
+
+/** A constraint without its id, which the instrument assigns. */
+/** A slider without the id the instrument assigns, and with sensible defaults. */
+export interface GeometrySliderDraft2D {
+  name: string;
+  value?: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  label?: string;
+  color?: string;
+  hidden?: boolean;
+}
+
+/** An implicit surface: the shape where an equation in x, y and z holds. */
+export interface ImplicitSurfaceInput3D {
+  /** `x^2 + y^2 + z^2 = 9`, or a bare expression read as "this is zero". */
+  input: string;
+  /** The box to look inside. A surface has no extent of its own to infer one from. */
+  domain?: { x?: [number, number]; y?: [number, number]; z?: [number, number] };
+  /** Cells along each axis; the equation is evaluated at `(resolution + 1)^3` corners. */
+  resolution?: number;
+}
+
+export type GeometryConstraintDraft2D =
+  | { kind: 'fixedLength'; pointIds: [string, string]; length: number; label?: string; enabled?: boolean }
+  | { kind: 'fixedAngle'; pointIds: [string, string, string]; degrees: number; label?: string; enabled?: boolean }
+  | { kind: 'parallel'; entityIds: [string, string]; label?: string; enabled?: boolean }
+  | { kind: 'perpendicular'; entityIds: [string, string]; label?: string; enabled?: boolean }
+  | { kind: 'equalLength'; segments: [[string, string], [string, string]]; label?: string; enabled?: boolean }
+  | { kind: 'equalRadius'; circleIds: [string, string]; label?: string; enabled?: boolean };
 
 export type EquationAxis3D = 'x' | 'y' | 'z';
 
@@ -155,7 +234,7 @@ export interface CrossSectionEntity extends GeometryLabStyleOptions {
 export interface SurfaceEntity3D extends GeometryLabStyleOptions {
   id: string;
   kind: 'surface3d';
-  surfaceKind: 'z-function' | 'parametric' | 'equation';
+  surfaceKind: 'z-function' | 'parametric' | 'equation' | 'implicit';
   dependentAxis?: EquationAxis3D;
   vertices: Vector3[];
   faces: number[][];
@@ -188,7 +267,16 @@ export type MeasurementSource3D =
   | { kind: 'pointPlaneDistance'; pointId: string; planeId: string }
   | { kind: 'solidVolume'; solidId: string }
   | { kind: 'solidSurfaceArea'; solidId: string }
-  | { kind: 'solidDihedral'; solidId: string; firstFaceId: string; secondFaceId: string };
+  | { kind: 'solidDihedral'; solidId: string; firstFaceId: string; secondFaceId: string }
+  // The measurements school solid geometry is actually about, and which the
+  // first four leave out: how far apart two points are, how far a point is from
+  // a line, the angle a line makes with another line or with a plane, and the
+  // distance between two lines that never meet.
+  | { kind: 'pointPointDistance'; firstPointId: string; secondPointId: string }
+  | { kind: 'pointLineDistance'; pointId: string; lineEntityId: string }
+  | { kind: 'lineLineAngle'; firstLineId: string; secondLineId: string }
+  | { kind: 'linePlaneAngle'; lineEntityId: string; planeId: string }
+  | { kind: 'lineLineDistance'; firstLineId: string; secondLineId: string };
 
 export interface Measurement3D {
   id: string;
@@ -263,7 +351,7 @@ export type GeometryLabSnapshot = InstrumentSnapshot<GeometryLabScene, GeometryL
 
 /** Stable record locations used by collaboration-safe conditional history patches. */
 export type GeometryLabHistoryRef =
-  | { collection: 'point2d' | 'entity2d' | 'constraint2d' | 'point3d' | 'entity3d' | 'workPlane' | 'measurement' | 'net' | 'link'; id: string }
+  | { collection: 'point2d' | 'entity2d' | 'constraint2d' | 'slider2d' | 'measurement2d' | 'point3d' | 'entity3d' | 'workPlane' | 'measurement' | 'net' | 'link'; id: string }
   | { collection: 'appState'; key: string }
   | { collection: 'metadata' };
 
@@ -296,6 +384,12 @@ export type GeometryLabDelta =
   | { op: 'addWorkPlane'; plane: WorkPlane3D }
   | { op: 'updateWorkPlane'; id: string; changes: Partial<WorkPlane3D> }
   | { op: 'deleteWorkPlane'; ids: string[] }
+  | { op: 'addConstraint2D'; constraint: GeometryConstraint }
+  | { op: 'addSlider2D'; slider: GeometrySlider }
+  | { op: 'updateSlider2D'; id: string; changes: Partial<Omit<GeometrySlider, 'id'>> }
+  | { op: 'deleteConstraint2D'; ids: string[] }
+  | { op: 'addMeasurement2D'; measurement: Measurement2D }
+  | { op: 'deleteMeasurement2D'; ids: string[] }
   | { op: 'addMeasurement'; measurement: Measurement3D }
   | { op: 'updateMeasurement'; id: string; changes: Partial<Measurement3D> }
   | { op: 'deleteMeasurement'; ids: string[] }
@@ -349,7 +443,26 @@ export interface ParametricCurve3DInput {
 
 export interface GeometryLab extends KleinInstrument<GeometryLabSnapshot, GeometryLabDelta, GeometryLabTool> {
   readonly actorId: string;
+  /** The snapshot without copying it, for callers that only read. See the implementation note. */
+  peekSnapshot(): Readonly<GeometryLabSnapshot>;
   importJson(input: string | JsonValue, options?: LoadOptions): void;
+  // 2D construction. The geometry behind these is shared with the Geometry
+  // Calculator through geometry-core, so the two instruments agree on what each
+  // construction means.
+  addPoint2D(point: Vector2 & GeometryLabStyleOptions): string;
+  addSegment2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addRay2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addVector2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addLine2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addPolygon2D(pointIds: string[], style?: GeometryLabStyleOptions): string;
+  addAngle2D(pointIds: [string, string, string], style?: GeometryLabStyleOptions): string;
+  addMidpoint2D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
+  addIntersection2D(firstEntityId: string, secondEntityId: string, style?: GeometryLabStyleOptions, index?: number): string;
+  addParallelLine2D(sourceEntityId: string, throughPointId: string, style?: GeometryLabStyleOptions): string;
+  addPerpendicularLine2D(sourceEntityId: string, throughPointId: string, style?: GeometryLabStyleOptions): string;
+  addAngleBisector2D(pointIds: [string, string, string], style?: GeometryLabStyleOptions): string;
+  addCircle2D(centerPointId: string, radiusPointId: string, style?: GeometryLabStyleOptions): string;
+  addCircleThroughPoints2D(pointIds: [string, string, string], style?: GeometryLabStyleOptions): string;
   addPoint3D(point: Vector3 & GeometryLabStyleOptions): string;
   addSegment3D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
   addLine3D(firstPointId: string, secondPointId: string, style?: GeometryLabStyleOptions): string;
@@ -360,7 +473,29 @@ export interface GeometryLab extends KleinInstrument<GeometryLabSnapshot, Geomet
   addWorkPlanePerpendicularToPlane(sourcePlaneId: string, through?: string | Vector3, style?: GeometryLabStyleOptions): string;
   addWorkPlanePerpendicularToLine(sourceEntityId: string, through?: string | Vector3, style?: GeometryLabStyleOptions): string;
   pointPlaneDistance(pointId: string, planeId: string): number;
+  transform2D(targetId: string, transform: GeometryTransform2D, style?: GeometryLabStyleOptions): string;
+  translate2D(targetId: string, vectorEntityId: string, style?: GeometryLabStyleOptions): string;
+  translateBy2D(targetId: string, dx: number, dy: number, style?: GeometryLabStyleOptions): string;
+  rotate2D(targetId: string, centerPointId: string, degrees: number, style?: GeometryLabStyleOptions): string;
+  reflectInLine2D(targetId: string, lineEntityId: string, style?: GeometryLabStyleOptions): string;
+  reflectInPoint2D(targetId: string, centerPointId: string, style?: GeometryLabStyleOptions): string;
+  dilate2D(targetId: string, centerPointId: string, factor: number, style?: GeometryLabStyleOptions): string;
+  addConstraint2D(constraint: GeometryConstraintDraft2D): string;
+  addSlider2D(slider: GeometrySliderDraft2D): string;
+  setSliderValue2D(id: string, value: number): void;
+  removeConstraint2D(ids: string | string[]): void;
+  addDistanceMeasurement2D(firstPointId: string, secondPointId: string, label?: string): string;
+  addLengthMeasurement2D(entityId: string, label?: string): string;
+  addPointLineDistanceMeasurement2D(pointId: string, entityId: string, label?: string): string;
+  addAngleMeasurement2D(pointIds: [string, string, string], label?: string): string;
+  addAreaMeasurement2D(polygonId: string, label?: string): string;
+  addPerimeterMeasurement2D(polygonId: string, label?: string): string;
   addPointPlaneDistanceMeasurement(pointId: string, planeId: string, label?: string): string;
+  addDistanceMeasurement3D(firstPointId: string, secondPointId: string, label?: string): string;
+  addPointLineDistanceMeasurement(pointId: string, lineEntityId: string, label?: string): string;
+  addLineAngleMeasurement(firstLineId: string, secondLineId: string, label?: string): string;
+  addLinePlaneAngleMeasurement(lineEntityId: string, planeId: string, label?: string): string;
+  addLineDistanceMeasurement(firstLineId: string, secondLineId: string, label?: string): string;
   addLinePlaneIntersection(lineEntityId: string, planeId: string, style?: GeometryLabStyleOptions): string;
   addPlanePlaneIntersection(firstPlaneId: string, secondPlaneId: string, style?: GeometryLabStyleOptions): string;
   addPrism(base: Vector3[], height?: number | Vector3, style?: SolidCreationOptions): string;

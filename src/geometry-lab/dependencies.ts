@@ -9,6 +9,7 @@ import type {
   GeometryLabSnapshot,
   GeometrySelection,
   Measurement3D,
+  MeasurementSource2D,
   WorkPlane3D,
 } from './types.js';
 
@@ -17,6 +18,8 @@ export type GeometryLabStoredCollection =
   | 'point2d'
   | 'entity2d'
   | 'constraint2d'
+  | 'slider2d'
+  | 'measurement2d'
   | 'point3d'
   | 'entity3d'
   | 'workPlane'
@@ -147,6 +150,8 @@ const STORED_COLLECTIONS: readonly GeometryLabStoredCollection[] = [
   'point2d',
   'entity2d',
   'constraint2d',
+  'slider2d',
+  'measurement2d',
   'point3d',
   'entity3d',
   'workPlane',
@@ -159,6 +164,8 @@ const GENERIC_REFERENCE_COLLECTIONS: readonly GeometryLabStoredCollection[] = [
   'point2d',
   'entity2d',
   'constraint2d',
+  'slider2d',
+  'measurement2d',
   'point3d',
   'entity3d',
   'workPlane',
@@ -168,9 +175,19 @@ const GENERIC_REFERENCE_COLLECTIONS: readonly GeometryLabStoredCollection[] = [
 
 const PLANE_COLLECTIONS: readonly GeometryLabStoredCollection[] = ['workPlane', 'entity3d'];
 
+/**
+ * Characters `encodeURIComponent` leaves exactly as they are. Generated ids are
+ * made of these, so the common case can skip the encode entirely - and the
+ * graph builder calls this once per node and twice per edge, on every edit.
+ */
+const UNRESERVED_ID = /^[A-Za-z0-9\-_.!~*'()]*$/;
+
 /** Produces the stable key used by every graph index. */
 export function geometryLabDependencyKey(ref: GeometryLabDependencyRef): GeometryLabDependencyKey {
-  return `${ref.collection}:${encodeURIComponent(ref.id)}`;
+  // Identical output either way: the test admits an id only when encoding it
+  // would return it unchanged.
+  const id = UNRESERVED_ID.test(ref.id) ? ref.id : encodeURIComponent(ref.id);
+  return `${ref.collection}:${id}`;
 }
 
 /** Returns all collection-qualified durable objects with the supplied globally scoped id. */
@@ -189,12 +206,51 @@ export function geometryLabDependencyRefsForId(
  */
 export function buildGeometryLabDependencyGraph(snapshot: GeometryLabSnapshot): GeometryLabDependencyGraph {
   const builder = new DependencyGraphBuilder();
+  populateGeometryLabDependencyGraph(builder, snapshot);
+  return builder.finish();
+}
+
+/**
+ * The subset of the graph the integrity check actually reads.
+ *
+ * <p>`checkDependencyGraph` needs three things: somewhere to look up a node's
+ * path for an issue message, the forward adjacency for cycle detection, and the
+ * ownership conflicts. The full graph materialises twelve indexes - six
+ * adjacency records, each an array per node, plus sorted edge lists and two
+ * id-keyed views - and the integrity check reads none of the other nine. On
+ * every edit.
+ *
+ * <p>Populated by the same code as the full graph, so the two cannot drift into
+ * seeing different nodes or edges.
+ */
+export interface GeometryLabIntegrityView {
+  nodesByKey: Readonly<Record<GeometryLabDependencyKey, GeometryLabDependencyNode>>;
+  /** Node keys in sorted order, so the consumer need not sort them again. */
+  sortedKeys: readonly GeometryLabDependencyKey[];
+  /** Forward adjacency. Nodes with no dependencies are simply absent. */
+  dependenciesByKey: Readonly<Record<GeometryLabDependencyKey, readonly GeometryLabDependencyKey[]>>;
+  ownershipConflicts: readonly GeometryLabOwnershipConflict[];
+}
+
+/** Builds only what the integrity check reads. See {@link GeometryLabIntegrityView}. */
+export function buildGeometryLabIntegrityView(snapshot: GeometryLabSnapshot): GeometryLabIntegrityView {
+  const builder = new DependencyGraphBuilder();
+  populateGeometryLabDependencyGraph(builder, snapshot);
+  return builder.finishIntegrityView();
+}
+
+function populateGeometryLabDependencyGraph(
+  builder: DependencyGraphBuilder,
+  snapshot: GeometryLabSnapshot,
+): void {
   const scene2d = snapshot.scene.scene2d;
   const scene3d = snapshot.scene.scene3d;
 
   addRecordNodes(builder, 'point2d', scene2d.points, 'scene.scene2d.points');
   addRecordNodes(builder, 'entity2d', scene2d.entities, 'scene.scene2d.entities');
   addRecordNodes(builder, 'constraint2d', scene2d.constraints ?? {}, 'scene.scene2d.constraints');
+  addRecordNodes(builder, 'slider2d', scene2d.sliders ?? {}, 'scene.scene2d.sliders');
+  addRecordNodes(builder, 'measurement2d', scene2d.measurements ?? {}, 'scene.scene2d.measurements');
   addRecordNodes(builder, 'point3d', scene3d.points, 'scene.scene3d.points');
   addRecordNodes(builder, 'entity3d', scene3d.entities, 'scene.scene3d.entities');
   addRecordNodes(builder, 'workPlane', scene3d.workPlanes, 'scene.scene3d.workPlanes');
@@ -212,6 +268,14 @@ export function buildGeometryLabDependencyGraph(snapshot: GeometryLabSnapshot): 
   }
   for (const constraint of Object.values(scene2d.constraints ?? {})) {
     addConstraintDependencies(builder, constraint);
+  }
+  for (const measurement of Object.values(scene2d.measurements ?? {})) {
+    // A 2D measurement depends on whatever it measures, so deleting a source
+    // takes the measurement with it rather than leaving a dangling number.
+    const dependent = storedRef('measurement2d', measurement.id);
+    for (const sourceId of geometryLabMeasurement2DSourceIds(measurement.source)) {
+      builder.addIdDependency(dependent, sourceId, 'measurementTarget', 'cascade', GENERIC_REFERENCE_COLLECTIONS);
+    }
   }
   for (const point of Object.values(scene3d.points)) {
     addConstructionDependencies(builder, storedRef('point3d', point.id), point.construction);
@@ -257,8 +321,6 @@ export function buildGeometryLabDependencyGraph(snapshot: GeometryLabSnapshot): 
       'reset',
     );
   }
-
-  return builder.finish();
 }
 
 /**
@@ -458,13 +520,79 @@ class DependencyGraphBuilder {
     this.#ownershipEdges.set(`${ownerKey}\u0000${ownedKey}\u0000${relation}`, edge);
   }
 
+  /**
+   * The integrity check's three indexes, and nothing else.
+   *
+   * <p>Two shortcuts are taken relative to `finish()`, and both are
+   * observationally identical rather than approximations. The edge lists are
+   * not sorted first, because every adjacency list is sorted after it is
+   * collected, so the order edges arrive in cannot survive into the output. And
+   * nodes with no dependencies are left out of `dependenciesByKey` entirely,
+   * because the only consumer reads it as `dependenciesByKey[key] ?? []`, for
+   * which a missing entry and an empty array are the same thing - while
+   * materialising them costs an array per node.
+   */
+  finishIntegrityView(): GeometryLabIntegrityView {
+    const sortedKeys = [...this.#nodes.keys()].sort(compareStrings);
+
+    const dependencies = new Map<GeometryLabDependencyKey, Set<GeometryLabDependencyKey>>();
+    for (const edge of this.#dependencyEdges.values()) {
+      if (!this.#nodes.has(edge.dependentKey) || !this.#nodes.has(edge.dependencyKey)) continue;
+      let bucket = dependencies.get(edge.dependentKey);
+      if (!bucket) {
+        bucket = new Set<GeometryLabDependencyKey>();
+        dependencies.set(edge.dependentKey, bucket);
+      }
+      bucket.add(edge.dependencyKey);
+    }
+
+    const dependenciesByKey = Object.create(null) as
+      Record<GeometryLabDependencyKey, readonly GeometryLabDependencyKey[]>;
+    for (const key of sortedKeys) {
+      const bucket = dependencies.get(key);
+      if (bucket) dependenciesByKey[key] = [...bucket].sort(compareStrings);
+    }
+
+    const owners = new Map<GeometryLabDependencyKey, Set<GeometryLabDependencyKey>>();
+    for (const edge of this.#ownershipEdges.values()) {
+      if (!this.#nodes.has(edge.ownedKey)) continue;
+      let bucket = owners.get(edge.ownedKey);
+      if (!bucket) {
+        bucket = new Set<GeometryLabDependencyKey>();
+        owners.set(edge.ownedKey, bucket);
+      }
+      bucket.add(edge.ownerKey);
+    }
+
+    const ownershipConflicts: GeometryLabOwnershipConflict[] = [];
+    for (const [ownedKey, ownerKeys] of owners) {
+      if (ownerKeys.size <= 1) continue;
+      ownershipConflicts.push({ ownedKey, ownerKeys: [...ownerKeys].sort(compareStrings) });
+    }
+    ownershipConflicts.sort((first, second) => compareStrings(first.ownedKey, second.ownedKey));
+
+    return {
+      nodesByKey: nodesToRecord(this.#nodes, sortedKeys),
+      sortedKeys,
+      dependenciesByKey,
+      ownershipConflicts,
+    };
+  }
+
   finish(): GeometryLabDependencyGraph {
     const dependencyEdges = [...this.#dependencyEdges.values()].sort(compareDependencyEdges);
     const ownershipEdges = [...this.#ownershipEdges.values()].sort(compareOwnershipEdges);
-    const dependenciesByKey = initializeKeySets(this.#nodes.keys());
-    const dependentsByKey = initializeKeySets(this.#nodes.keys());
-    const ownedByOwnerKey = initializeKeySets(this.#nodes.keys());
-    const ownersByOwnedKey = initializeKeySets(this.#nodes.keys());
+
+    // Sorted once and reused. Every map below is keyed by node key and has to
+    // come out in sorted order; building each one from its own sort meant
+    // sorting the same key list six times per graph, which is most of what
+    // this function used to cost.
+    const sortedNodeKeys = [...this.#nodes.keys()].sort(compareStrings);
+
+    const dependenciesByKey = initializeKeySets(sortedNodeKeys);
+    const dependentsByKey = initializeKeySets(sortedNodeKeys);
+    const ownedByOwnerKey = initializeKeySets(sortedNodeKeys);
+    const ownersByOwnedKey = initializeKeySets(sortedNodeKeys);
 
     for (const edge of dependencyEdges) {
       dependenciesByKey.get(edge.dependentKey)?.add(edge.dependencyKey);
@@ -475,7 +603,7 @@ class DependencyGraphBuilder {
       ownersByOwnedKey.get(edge.ownedKey)?.add(edge.ownerKey);
     }
 
-    const ownersRecord = setsToRecord(ownersByOwnedKey);
+    const ownersRecord = keySetsToRecord(ownersByOwnedKey);
     const idViews = buildIdViews(this.#nodes, dependencyEdges);
     const ownershipConflicts = Object.entries(ownersRecord)
       .filter((entry): entry is [GeometryLabDependencyKey, readonly GeometryLabDependencyKey[]] => entry[1].length > 1)
@@ -483,15 +611,15 @@ class DependencyGraphBuilder {
       .sort((a, b) => compareStrings(a.ownedKey, b.ownedKey));
 
     return {
-      nodesByKey: mapToRecord(this.#nodes),
+      nodesByKey: nodesToRecord(this.#nodes, sortedNodeKeys),
       keysById: stringArraysToRecord(this.#keysById),
       dependencyEdges,
       ownershipEdges,
       dependenciesById: idViews.dependenciesById,
       dependentsById: idViews.dependentsById,
-      dependenciesByKey: setsToRecord(dependenciesByKey),
-      dependentsByKey: setsToRecord(dependentsByKey),
-      ownedByOwnerKey: setsToRecord(ownedByOwnerKey),
+      dependenciesByKey: keySetsToRecord(dependenciesByKey),
+      dependentsByKey: keySetsToRecord(dependentsByKey),
+      ownedByOwnerKey: keySetsToRecord(ownedByOwnerKey),
       ownersByOwnedKey: ownersRecord,
       unresolvedDependencies: [...this.#unresolved].sort(compareUnresolvedDependencies),
       ownershipConflicts,
@@ -583,6 +711,22 @@ function addConstructionDependencies(
 ): void {
   for (const sourceId of geometryConstructionSourceIds(construction)) {
     builder.addIdDependency(dependent, sourceId, 'constructionSource', 'cascade', GENERIC_REFERENCE_COLLECTIONS);
+  }
+}
+
+/** Every object a 2D measurement is computed from. */
+export function geometryLabMeasurement2DSourceIds(source: MeasurementSource2D): string[] {
+  switch (source.kind) {
+    case 'pointDistance':
+      return [source.firstPointId, source.secondPointId];
+    case 'segmentLength':
+    case 'polygonArea':
+    case 'polygonPerimeter':
+      return [source.entityId];
+    case 'pointLineDistance':
+      return [source.pointId, source.entityId];
+    case 'angle':
+      return [...source.pointIds];
   }
 }
 
@@ -722,15 +866,32 @@ function stringProperty(value: object, key: string): string | undefined {
   return typeof candidate === 'string' ? candidate : undefined;
 }
 
+/**
+ * Builds the empty adjacency map in sorted key order.
+ *
+ * <p>Takes keys that are **already sorted**. Map preserves insertion order, so
+ * every record derived from one of these maps is emitted in sorted order
+ * without sorting again - which is what lets `keySetsToRecord` below skip its
+ * own key sort.
+ */
 function initializeKeySets(
-  keys: Iterable<GeometryLabDependencyKey>,
+  sortedKeys: readonly GeometryLabDependencyKey[],
 ): Map<GeometryLabDependencyKey, Set<GeometryLabDependencyKey>> {
-  return new Map([...keys].sort(compareStrings).map(key => [key, new Set<GeometryLabDependencyKey>()]));
+  const map = new Map<GeometryLabDependencyKey, Set<GeometryLabDependencyKey>>();
+  for (const key of sortedKeys) map.set(key, new Set<GeometryLabDependencyKey>());
+  return map;
 }
 
-function mapToRecord<T>(map: ReadonlyMap<GeometryLabDependencyKey, T>): Record<GeometryLabDependencyKey, T> {
+/** Emits nodes in the supplied sorted key order rather than sorting again. */
+function nodesToRecord<T>(
+  map: ReadonlyMap<GeometryLabDependencyKey, T>,
+  sortedKeys: readonly GeometryLabDependencyKey[],
+): Record<GeometryLabDependencyKey, T> {
   const record = Object.create(null) as Record<GeometryLabDependencyKey, T>;
-  for (const [key, value] of [...map.entries()].sort(([a], [b]) => compareStrings(a, b))) record[key] = value;
+  for (const key of sortedKeys) {
+    const value = map.get(key);
+    if (value !== undefined) record[key] = value;
+  }
   return record;
 }
 
@@ -744,11 +905,16 @@ function stringArraysToRecord(
   return record;
 }
 
-function setsToRecord(
+/**
+ * Emits an adjacency record from a map already in sorted key order - which is
+ * what `initializeKeySets` guarantees. Values are still sorted; only the
+ * redundant key sort is gone.
+ */
+function keySetsToRecord(
   map: ReadonlyMap<GeometryLabDependencyKey, ReadonlySet<GeometryLabDependencyKey>>,
 ): Record<GeometryLabDependencyKey, readonly GeometryLabDependencyKey[]> {
   const record = Object.create(null) as Record<GeometryLabDependencyKey, readonly GeometryLabDependencyKey[]>;
-  for (const [key, values] of [...map.entries()].sort(([a], [b]) => compareStrings(a, b))) {
+  for (const [key, values] of map) {
     record[key] = [...values].sort(compareStrings);
   }
   return record;
@@ -786,18 +952,27 @@ function groupOwnershipEdges(
   return result;
 }
 
+/**
+ * Compared field by field rather than by joining each edge into one string.
+ *
+ * <p>Exactly the same ordering. The NUL separator sorts below every other
+ * character and appears in none of these fields, so a joined comparison and a
+ * field-wise one agree on every pair. What changes is that sorting E edges no
+ * longer allocates two strings per comparison - O(E log E) throwaway strings on
+ * every graph build, and the graph is rebuilt on every edit.
+ */
 function compareDependencyEdges(a: GeometryLabDependencyEdge, b: GeometryLabDependencyEdge): number {
-  return compareStrings(
-    `${a.dependencyKey}\u0000${a.dependentKey}\u0000${a.relation}\u0000${a.onDependencyDelete}`,
-    `${b.dependencyKey}\u0000${b.dependentKey}\u0000${b.relation}\u0000${b.onDependencyDelete}`,
-  );
+  return compareStrings(a.dependencyKey, b.dependencyKey)
+    || compareStrings(a.dependentKey, b.dependentKey)
+    || compareStrings(a.relation, b.relation)
+    || compareStrings(a.onDependencyDelete, b.onDependencyDelete);
 }
 
+/** Field-wise for the same reason as `compareDependencyEdges` above. */
 function compareOwnershipEdges(a: GeometryLabOwnershipEdge, b: GeometryLabOwnershipEdge): number {
-  return compareStrings(
-    `${a.ownerKey}\u0000${a.ownedKey}\u0000${a.relation}`,
-    `${b.ownerKey}\u0000${b.ownedKey}\u0000${b.relation}`,
-  );
+  return compareStrings(a.ownerKey, b.ownerKey)
+    || compareStrings(a.ownedKey, b.ownedKey)
+    || compareStrings(a.relation, b.relation);
 }
 
 function compareUnresolvedDependencies(a: GeometryLabUnresolvedDependency, b: GeometryLabUnresolvedDependency): number {

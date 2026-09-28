@@ -16,7 +16,59 @@ export type GeometryConstruction =
   | { kind: 'tangentLine'; circleId: string; throughPointId: string; branch: -1 | 1 }
   | { kind: 'angleBisector'; pointIds: [string, string, string] }
   | { kind: 'angleFromLines'; sourceIds: [string, string] }
+  // 3D. Where a line meets a plane, and the two points that span the line where
+  // two planes meet. Before these existed the instrument computed the position
+  // once and stored a free point, so moving the plane left the "intersection"
+  // behind - a figure that quietly stopped being true.
+  // The image of another object under a transformation. The transform's own
+  // parameters are objects too - a mirror line, a centre of rotation, a
+  // translation vector - so the image follows both its source and the thing
+  // transforming it, which is what makes reflecting a triangle in a line worth
+  // doing on screen rather than on paper.
+  | { kind: 'transformedPoint'; sourceId: string; transform: GeometryTransform2D }
+  | { kind: 'linePlaneIntersection'; lineEntityId: string; planeId: string }
+  | { kind: 'planePlaneIntersection'; firstPlaneId: string; secondPlaneId: string; end: 0 | 1 }
+  /**
+   * A point placed along an object rather than at a position.
+   *
+   * <p>`at` runs from 0 to 1 over the object as drawn - end to end of a
+   * segment, once round a circle, round the perimeter of a polygon - so that
+   * one number describes a position on any of them. When a slider supplies the
+   * number, the point sweeps as the slider moves, which is what a locus is
+   * traced by.
+   */
+  | { kind: 'pointOnPath'; entityId: string; at: number; sliderId?: string }
+  /**
+   * The path a point traces as a slider sweeps its whole range.
+   *
+   * <p>A locus used to be a list of coordinates somebody had computed
+   * elsewhere, which made it a picture of a locus rather than one: the points
+   * stayed where they were put when the figure moved. This samples the tracer
+   * as the driver sweeps, so the curve follows the construction that generates
+   * it - which is the entire reason conics and envelopes are worth doing on a
+   * screen.
+   */
+  | { kind: 'dynamicLocus'; sliderId: string; tracerId: string; samples: number }
   | { kind: 'custom'; sourceIds: string[]; label?: string };
+
+/**
+ * A plane transformation, described by the objects that define it.
+ *
+ * <p>Deliberately not a matrix. `rotate` naming a centre *point* means the image
+ * turns when that point is dragged; a matrix would freeze the numbers at the
+ * moment the transformation was applied, which is what makes a transformation
+ * tool a one-off edit instead of a construction.
+ *
+ * <p>`translateBy` is the exception, for a fixed offset with no vector to point
+ * at. It is the only member whose parameters are numbers alone.
+ */
+export type GeometryTransform2D =
+  | { kind: 'translate'; vectorEntityId: string }
+  | { kind: 'translateBy'; dx: number; dy: number }
+  | { kind: 'rotate'; centerPointId: string; degrees: number }
+  | { kind: 'reflectLine'; lineEntityId: string }
+  | { kind: 'reflectPoint'; centerPointId: string }
+  | { kind: 'dilate'; centerPointId: string; factor: number };
 
 /** Serializable 2D point used by construction and whiteboard-style geometry scenes. */
 export interface GeometryPoint2D extends Vector2 {
@@ -239,6 +291,39 @@ export interface GeometryScene {
   points: Record<string, GeometryPoint>;
   entities: Record<string, GeometryEntity>;
   constraints?: Record<string, GeometryConstraint>;
+  /**
+   * Named numbers the figure can be built on.
+   *
+   * <p>Optional so that every snapshot written before they existed stays valid
+   * without a migration, which is the same reason `constraints` is.
+   */
+  sliders?: Record<string, GeometrySlider>;
+}
+
+/**
+ * A number with a range, which the figure can be a function of.
+ *
+ * <p>The thing that turns a drawing into an experiment: a point placed at a
+ * position is one figure, and a point placed at a *parameter* is every figure
+ * that parameter can produce. Conics, envelopes and loci are all this and
+ * nothing else, which is why the word appeared once in the whole codebase, as
+ * an enum member with nothing behind it.
+ *
+ * <p>Deliberately the same shape as the graphing instrument's slider, because
+ * a student who has met one has met the other.
+ */
+export interface GeometrySlider {
+  id: string;
+  /** What it is called, which is how a construction refers to it. */
+  name: string;
+  value: number;
+  min: number;
+  max: number;
+  /** The granularity a control should move in. Zero means continuous. */
+  step: number;
+  label?: string;
+  color?: string;
+  hidden?: boolean;
 }
 
 /** Direct geometry dependencies for each object id and reverse dependent lookup. */
@@ -388,7 +473,718 @@ export function geometryConstructionSourceIds(construction: GeometryConstruction
       return uniqueStrings([construction.sourceLineId, construction.throughPointId]);
     case 'tangentLine':
       return uniqueStrings([construction.circleId, construction.throughPointId]);
+    case 'transformedPoint':
+      return uniqueStrings([construction.sourceId, ...geometryTransform2DSourceIds(construction.transform)]);
+    case 'pointOnPath':
+      return uniqueStrings([construction.entityId, ...(construction.sliderId ? [construction.sliderId] : [])]);
+    case 'dynamicLocus':
+      return uniqueStrings([construction.sliderId, construction.tracerId]);
+    case 'linePlaneIntersection':
+      return uniqueStrings([construction.lineEntityId, construction.planeId]);
+    case 'planePlaneIntersection':
+      return uniqueStrings([construction.firstPlaneId, construction.secondPlaneId]);
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Constraint solving                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How many relaxation passes a constrained scene is given per edit.
+ *
+ * <p>Constraints are enforced by repeatedly nudging points until they stop
+ * moving, which is the classic way an interactive geometry tool loses its frame
+ * budget: an over-constrained or contradictory figure never converges, and an
+ * uncapped loop spins on every drag. Six passes settle every satisfiable figure
+ * this model can express, and a figure that has not settled by then is reported
+ * as it stands rather than chased.
+ */
+const CONSTRAINT_SOLVER_ITERATIONS = 6;
+
+/**
+ * Applies every enabled constraint until the scene stops changing.
+ *
+ * <p>Moved here from the Geometry Calculator, which was its only home, so the
+ * Lab can enforce the constraints it has always been able to *store*. Nothing
+ * in it reads a Calculator-specific field, so it generalises over any
+ * `GeometryScene` unchanged.
+ *
+ * <p>`changedIds` is what the edit touched, and it decides which end of a
+ * constraint gives way: a fixed-length segment whose first point the user just
+ * dragged moves its second point, not the one under the cursor.
+ */
+export function constrainGeometryScene<T extends GeometryScene>(
+  scene: T,
+  changedIds: Iterable<string>,
+): T {
+  const constraints = Object.values(scene.constraints ?? {}).filter(constraint => constraint.enabled !== false);
+  if (!constraints.length) return scene;
+
+  const changedSet = new Set(changedIds);
+  let next = scene;
+  for (let iteration = 0; iteration < CONSTRAINT_SOLVER_ITERATIONS; iteration += 1) {
+    let changed = false;
+    for (const constraint of constraints) {
+      const before = next;
+      next = enforceGeometryConstraint(next, constraint, changedSet);
+      if (next !== before) changed = true;
+    }
+    if (!changed) break;
+    next = recomputeGeometryScene(next);
+  }
+  return next;
+}
+
+function enforceGeometryConstraint<T extends GeometryScene>(
+  scene: T,
+  constraint: GeometryConstraint,
+  changedSet: Set<string>,
+): T {
+  switch (constraint.kind) {
+    case 'fixedLength':
+      return enforceFixedLengthConstraint(scene, constraint.pointIds, constraint.length, changedSet);
+    case 'fixedAngle':
+      return enforceFixedAngleConstraint(scene, constraint.pointIds, constraint.degrees, changedSet);
+    case 'parallel':
+      return enforceDirectionConstraint(scene, constraint.entityIds, changedSet, false);
+    case 'perpendicular':
+      return enforceDirectionConstraint(scene, constraint.entityIds, changedSet, true);
+    case 'equalLength':
+      return enforceEqualLengthConstraint(scene, constraint.segments, changedSet);
+    case 'equalRadius':
+      return enforceEqualRadiusConstraint(scene, constraint.circleIds, changedSet);
+  }
+}
+
+function enforceFixedLengthConstraint<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string],
+  length: number,
+  changedSet: Set<string>,
+): T {
+  return geometryAdjustSegmentLength(scene, pointIds, length, changedSet);
+}
+
+function enforceEqualLengthConstraint<T extends GeometryScene>(
+  scene: T,
+  segments: [[string, string], [string, string]],
+  changedSet: Set<string>,
+): T {
+  const [firstIds, secondIds] = segments;
+  const firstLength = geometrySegmentLength(scene, firstIds);
+  const secondLength = geometrySegmentLength(scene, secondIds);
+  if (!Number.isFinite(firstLength) || !Number.isFinite(secondLength) || firstLength <= 0 || secondLength <= 0) {
+    return scene;
+  }
+  const firstChanged = idsIntersect(firstIds, changedSet);
+  const secondChanged = idsIntersect(secondIds, changedSet);
+  if (firstChanged && !secondChanged) return geometryAdjustSegmentLength(scene, firstIds, secondLength, changedSet);
+  return geometryAdjustSegmentLength(scene, secondIds, firstLength, changedSet);
+}
+
+function enforceFixedAngleConstraint<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string, string],
+  degrees: number,
+  changedSet: Set<string>,
+): T {
+  const [firstId, vertexId, secondId] = pointIds;
+  const first = constraintPoint2D(scene, firstId);
+  const vertex = constraintPoint2D(scene, vertexId);
+  const second = constraintPoint2D(scene, secondId);
+  if (!first || !vertex || !second || !Number.isFinite(degrees)) return scene;
+
+  const secondEditable = isEditablePoint(scene, secondId);
+  const firstEditable = isEditablePoint(scene, firstId);
+  const moveSecond = secondEditable && (
+    changedSet.has(secondId)
+    || changedSet.has(vertexId)
+    || !changedSet.has(firstId)
+    || !firstEditable
+  );
+
+  if (moveSecond) {
+    return geometrySetPointOnAngle(scene, {
+      moveId: secondId,
+      anchor: vertex,
+      base: first,
+      current: second,
+      degrees,
+    });
+  }
+  if (firstEditable) {
+    return geometrySetPointOnAngle(scene, {
+      moveId: firstId,
+      anchor: vertex,
+      base: second,
+      current: first,
+      degrees,
+    });
+  }
+  return scene;
+}
+
+function enforceDirectionConstraint<T extends GeometryScene>(
+  scene: T,
+  entityIds: [string, string],
+  changedSet: Set<string>,
+  perpendicular: boolean,
+): T {
+  const firstIds = geometryLineConstraintPointIds(scene, entityIds[0]);
+  const secondIds = geometryLineConstraintPointIds(scene, entityIds[1]);
+  if (!firstIds || !secondIds) return scene;
+
+  const firstChanged = idsIntersect([...firstIds, entityIds[0]], changedSet);
+  const secondChanged = idsIntersect([...secondIds, entityIds[1]], changedSet);
+  const targetIds = firstChanged && !secondChanged ? firstIds : secondIds;
+  const sourceIds = targetIds === firstIds ? secondIds : firstIds;
+  const sourceDirection = segmentDirection(scene, sourceIds);
+  if (!sourceDirection) return scene;
+  const direction = perpendicular
+    ? { x: -sourceDirection.y, y: sourceDirection.x }
+    : sourceDirection;
+  return adjustLineDirection(scene, targetIds, direction, changedSet);
+}
+
+function enforceEqualRadiusConstraint<T extends GeometryScene>(
+  scene: T,
+  circleIds: [string, string],
+  changedSet: Set<string>,
+): T {
+  const first = scene.entities[circleIds[0]];
+  const second = scene.entities[circleIds[1]];
+  if (first?.kind !== 'circle' || second?.kind !== 'circle') return scene;
+  if (!Number.isFinite(first.radius) || !Number.isFinite(second.radius) || first.radius <= 0 || second.radius <= 0) {
+    return scene;
+  }
+
+  const firstChanged = idsIntersect([circleIds[0], ...circleConstraintPointIds(first)], changedSet);
+  const secondChanged = idsIntersect([circleIds[1], ...circleConstraintPointIds(second)], changedSet);
+  if (firstChanged && !secondChanged) return geometrySetCircleRadius(scene, first.id, second.radius);
+  return geometrySetCircleRadius(scene, second.id, first.radius);
+}
+
+export function geometryAdjustSegmentLength<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string],
+  length: number,
+  changedSet: Set<string>,
+): T {
+  if (!Number.isFinite(length) || length <= 0) return scene;
+  const moveId = chooseEditablePointToMove(scene, pointIds, changedSet);
+  if (!moveId) return scene;
+  const anchorId = pointIds[0] === moveId ? pointIds[1] : pointIds[0];
+  const move = constraintPoint2D(scene, moveId);
+  const anchor = constraintPoint2D(scene, anchorId);
+  if (!move || !anchor) return scene;
+  const direction = normalizeVector2D({ x: move.x - anchor.x, y: move.y - anchor.y }) ?? { x: 1, y: 0 };
+  return geometrySetPointPosition(scene, moveId, {
+    x: anchor.x + direction.x * length,
+    y: anchor.y + direction.y * length,
+  });
+}
+
+function adjustLineDirection<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string],
+  direction: Vector2,
+  changedSet: Set<string>,
+): T {
+  const normalized = normalizeVector2D(direction);
+  if (!normalized) return scene;
+  const moveId = chooseEditablePointToMove(scene, pointIds, changedSet);
+  if (!moveId) return scene;
+  const anchorId = pointIds[0] === moveId ? pointIds[1] : pointIds[0];
+  const move = constraintPoint2D(scene, moveId);
+  const anchor = constraintPoint2D(scene, anchorId);
+  if (!move || !anchor) return scene;
+  const length = Math.max(distance2D(move, anchor), 1);
+  const currentDirection = normalizeVector2D({ x: move.x - anchor.x, y: move.y - anchor.y });
+  const sign = currentDirection && dot(currentDirection, normalized) < 0 ? -1 : 1;
+  return geometrySetPointPosition(scene, moveId, {
+    x: anchor.x + normalized.x * sign * length,
+    y: anchor.y + normalized.y * sign * length,
+  });
+}
+
+export function geometrySetPointOnAngle<T extends GeometryScene>(
+  scene: T,
+  options: {
+    moveId: string;
+    anchor: Vector2;
+    base: Vector2;
+    current: Vector2;
+    degrees: number;
+  },
+): T {
+  const baseDirection = normalizeVector2D({
+    x: options.base.x - options.anchor.x,
+    y: options.base.y - options.anchor.y,
+  });
+  if (!baseDirection) return scene;
+  const radius = Math.max(distance2D(options.current, options.anchor), 1);
+  const baseAngle = Math.atan2(baseDirection.y, baseDirection.x);
+  const target = ((options.degrees % 360) * Math.PI) / 180;
+  const currentAngle = Math.atan2(options.current.y - options.anchor.y, options.current.x - options.anchor.x);
+  const first = baseAngle + target;
+  const second = baseAngle - target;
+  const angle = angularDistance(currentAngle, first) <= angularDistance(currentAngle, second) ? first : second;
+  return geometrySetPointPosition(scene, options.moveId, {
+    x: options.anchor.x + Math.cos(angle) * radius,
+    y: options.anchor.y + Math.sin(angle) * radius,
+  });
+}
+
+export function geometrySetCircleRadius<T extends GeometryScene>(
+  scene: T,
+  circleId: string,
+  radius: number,
+): T {
+  if (!Number.isFinite(radius) || radius <= 0) return scene;
+  const circle = scene.entities[circleId];
+  if (circle?.kind !== 'circle' || circle.locked) return scene;
+
+  if (circle.construction?.kind === 'circleCenterPoint') {
+    const center = constraintPoint2D(scene, circle.construction.centerPointId);
+    const radiusPoint = constraintPoint2D(scene, circle.construction.radiusPointId);
+    if (!center || !radiusPoint || radiusPoint.locked) return scene;
+    const direction = normalizeVector2D({ x: radiusPoint.x - center.x, y: radiusPoint.y - center.y }) ?? { x: 1, y: 0 };
+    return geometrySetPointPosition(scene, radiusPoint.id, {
+      x: center.x + direction.x * radius,
+      y: center.y + direction.y * radius,
+    });
+  }
+
+  if (circle.construction?.kind === 'circleThroughPoints') return scene;
+  if (Math.abs(circle.radius - radius) <= 1e-9) return scene;
+  return {
+    ...scene,
+    entities: {
+      ...scene.entities,
+      [circle.id]: { ...circle, radius },
+    },
+  };
+}
+
+export function geometrySetPointPosition<T extends GeometryScene>(
+  scene: T,
+  pointId: string,
+  position: Vector2,
+): T {
+  const point = constraintPoint2D(scene, pointId);
+  if (!point || point.locked || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return scene;
+  if (Math.abs(point.x - position.x) <= 1e-9 && Math.abs(point.y - position.y) <= 1e-9) return scene;
+  return {
+    ...scene,
+    points: {
+      ...scene.points,
+      [point.id]: { ...point, x: position.x, y: position.y },
+    },
+  };
+}
+
+function chooseEditablePointToMove<T extends GeometryScene>(
+  scene: T,
+  pointIds: [string, string],
+  changedSet: Set<string>,
+): string | null {
+  const changed = pointIds.filter(pointId => changedSet.has(pointId) && isEditablePoint(scene, pointId));
+  if (changed.length > 0) return changed[changed.length - 1] ?? null;
+  if (isEditablePoint(scene, pointIds[1])) return pointIds[1];
+  if (isEditablePoint(scene, pointIds[0])) return pointIds[0];
+  return null;
+}
+
+function isEditablePoint<T extends GeometryScene>(scene: T, pointId: string): boolean {
+  const point = constraintPoint2D(scene, pointId);
+  return Boolean(point && !point.locked);
+}
+
+export function geometryLineConstraintPointIds<T extends GeometryScene>(scene: T, entityId: string): [string, string] | null {
+  const entity = scene.entities[entityId];
+  if (!entity) return null;
+  if (
+    entity.kind === 'segment'
+    || entity.kind === 'line'
+    || entity.kind === 'ray'
+    || entity.kind === 'vector'
+  ) {
+    return entity.pointIds;
+  }
+  return null;
+}
+
+export function geometrySegmentLength<T extends GeometryScene>(scene: T, pointIds: [string, string]): number {
+  const first = constraintPoint2D(scene, pointIds[0]);
+  const second = constraintPoint2D(scene, pointIds[1]);
+  return first && second ? distance2D(first, second) : NaN;
+}
+
+function segmentDirection<T extends GeometryScene>(scene: T, pointIds: [string, string]): Vector2 | null {
+  const first = constraintPoint2D(scene, pointIds[0]);
+  const second = constraintPoint2D(scene, pointIds[1]);
+  return first && second ? normalizeVector2D({ x: second.x - first.x, y: second.y - first.y }) : null;
+}
+
+function circleConstraintPointIds<T extends GeometryScene>(circle: CircleEntity): string[] {
+  const ids = [circle.centerId];
+  if (circle.construction?.kind === 'circleCenterPoint') ids.push(circle.construction.radiusPointId);
+  if (circle.construction?.kind === 'circleThroughPoints') ids.push(...circle.construction.pointIds);
+  return ids;
+}
+
+function idsIntersect<T extends GeometryScene>(ids: Iterable<string>, changedSet: Set<string>): boolean {
+  for (const id of ids) {
+    if (changedSet.has(id)) return true;
+  }
+  return false;
+}
+
+/** Dot product of two 2D vectors. */
+function dot(first: Vector2, second: Vector2): number {
+  return first.x * second.x + first.y * second.y;
+}
+
+/** Smallest absolute angle between two headings, in radians. */
+function angularDistance(first: number, second: number): number {
+  return Math.abs(normalizeAngleDelta(first - second));
+}
+
+/**
+ * Wraps an angle difference into (-pi, pi], so 359 and 1 degrees are 2 apart.
+ * Copied verbatim from the Calculator rather than rewritten with a modulo: this
+ * extraction is meant to preserve behaviour exactly, and the two differ at the
+ * boundary where the difference is precisely pi.
+ */
+function normalizeAngleDelta(delta: number): number {
+  let result = delta;
+  while (result <= -Math.PI) result += Math.PI * 2;
+  while (result > Math.PI) result -= Math.PI * 2;
+  return result;
+}
+
+/** The 2D point with this id, or undefined when it is missing or 3D. */
+function constraintPoint2D<T extends GeometryScene>(scene: T, id: string): GeometryPoint2D | undefined {
+  const point = scene.points[id];
+  return isGeometryPoint2D(point) ? point : undefined;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shared 2D construction builders                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The records a construction adds to a scene, before any instrument has decided
+ * how to commit them.
+ *
+ * <p>The two instruments that build 2D geometry disagree about almost
+ * everything around a construction - id prefixes, theme colours, whether the
+ * result gets selected, and the shape of the delta that carries it - but they
+ * agree completely about what a perpendicular *is*. These builders are that
+ * agreement, and nothing else: given a scene and an id source, they return the
+ * records, and the caller commits them however it commits things.
+ *
+ * <p>Some constructions need a hidden helper point to pin down a line's
+ * direction, which is why this returns points as well as entities even for
+ * operations that look like they only add an entity.
+ */
+export interface GeometryConstructionResult {
+  points: GeometryPoint2D[];
+  entities: GeometryEntity[];
+  /** The object the caller should treat as the result - the last thing created. */
+  primaryId: string;
+}
+
+/** Supplies ids for newly built records. Instruments pass their own generator. */
+export type GeometryIdAllocator = (prefix: string) => string;
+
+function point2D(id: string, position: Vector2, extra: Partial<GeometryPoint2D> = {}): GeometryPoint2D {
+  return { id, kind: 'point2d', x: position.x, y: position.y, ...extra };
+}
+
+/** Midpoint of two existing points, linked so it follows them. */
+export function buildMidpoint2D(
+  scene: GeometryScene,
+  firstPointId: string,
+  secondPointId: string,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const first = scene.points[firstPointId];
+  const second = scene.points[secondPointId];
+  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return null;
+  if (firstPointId === secondPointId) return null;
+
+  const id = allocate('p');
+  const created = point2D(id, midpoint2D(first, second), {
+    locked: true,
+    construction: { kind: 'midpoint', sourceIds: [firstPointId, secondPointId] },
+  });
+  return { points: [created], entities: [], primaryId: id };
+}
+
+/** Intersection of two entities, at `index` when they meet more than once. */
+export function buildIntersection2D(
+  scene: GeometryScene,
+  firstEntityId: string,
+  secondEntityId: string,
+  allocate: GeometryIdAllocator,
+  index = 0,
+): GeometryConstructionResult | null {
+  const position = geometryIntersectionPoint2D(scene, firstEntityId, secondEntityId, index);
+  if (!position) return null;
+
+  const id = allocate('p');
+  const created = point2D(id, position, {
+    locked: true,
+    construction: { kind: 'intersection', sourceIds: [firstEntityId, secondEntityId], index },
+  });
+  return { points: [created], entities: [], primaryId: id };
+}
+
+/**
+ * A line through a point, parallel or perpendicular to an existing line-like
+ * entity. The hidden helper point is what gives the line its second defining
+ * point; recomputation moves it as the source turns.
+ */
+export function buildConstructedLine2D(
+  scene: GeometryScene,
+  kind: 'parallelLine' | 'perpendicularLine',
+  sourceEntityId: string,
+  throughPointId: string,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const through = scene.points[throughPointId];
+  const source = scene.entities[sourceEntityId];
+  if (!isGeometryPoint2D(through) || !source) return null;
+
+  const sourceEquation = geometryLineLikeEquation2D(scene, sourceEntityId);
+  if (!sourceEquation) return null;
+
+  const equation = kind === 'parallelLine'
+    ? normalizeGeometryLineEquation({
+      a: sourceEquation.a,
+      b: sourceEquation.b,
+      c: -(sourceEquation.a * through.x + sourceEquation.b * through.y),
+    })
+    : normalizeGeometryLineEquation({
+      a: -sourceEquation.b,
+      b: sourceEquation.a,
+      c: -((-sourceEquation.b) * through.x + sourceEquation.a * through.y),
+    });
+  if (!equation) return null;
+
+  const direction = normalizeVector2D({ x: equation.b, y: -equation.a }) ?? { x: 1, y: 0 };
+  const helperId = allocate('p');
+  const helper = point2D(helperId, { x: through.x + direction.x, y: through.y + direction.y }, {
+    hidden: true,
+    locked: true,
+  });
+  const lineId = allocate('line');
+  const line: LineEntity = {
+    id: lineId,
+    kind: 'line',
+    pointIds: [throughPointId, helperId],
+    equation,
+    construction: { kind, sourceLineId: sourceEntityId, throughPointId },
+  };
+  return { points: [helper], entities: [line], primaryId: lineId };
+}
+
+/** The bisector of the angle at `pointIds[1]`, as a line from the vertex. */
+export function buildAngleBisector2D(
+  scene: GeometryScene,
+  pointIds: [string, string, string],
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const vertex = scene.points[pointIds[1]];
+  if (!isGeometryPoint2D(vertex)) return null;
+
+  const helperPosition = geometryAngleBisectorPoint2D(scene, pointIds);
+  if (!helperPosition) return null;
+  const equation = lineEquationFrom2DPoints(vertex, helperPosition);
+  if (!equation) return null;
+
+  const helperId = allocate('p');
+  const helper = point2D(helperId, helperPosition, { hidden: true, locked: true });
+  const lineId = allocate('line');
+  const line: LineEntity = {
+    id: lineId,
+    kind: 'line',
+    pointIds: [pointIds[1], helperId],
+    equation,
+    construction: { kind: 'angleBisector', pointIds },
+  };
+  return { points: [helper], entities: [line], primaryId: lineId };
+}
+
+/** A circle centred on one point and passing through another. */
+export function buildCircleByCenterPoint2D(
+  scene: GeometryScene,
+  centerPointId: string,
+  radiusPointId: string,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const center = scene.points[centerPointId];
+  const radiusPoint = scene.points[radiusPointId];
+  if (!isGeometryPoint2D(center) || !isGeometryPoint2D(radiusPoint)) return null;
+
+  const radius = distance2D(center, radiusPoint);
+  if (!Number.isFinite(radius) || radius <= 0) return null;
+
+  const id = allocate('circle');
+  const circle: CircleEntity = {
+    id,
+    kind: 'circle',
+    centerId: centerPointId,
+    radius,
+    construction: { kind: 'circleCenterPoint', centerPointId, radiusPointId },
+  };
+  return { points: [], entities: [circle], primaryId: id };
+}
+
+/** The circle through three points, with its centre as a hidden owned point. */
+export function buildCircleThroughPoints2D(
+  scene: GeometryScene,
+  pointIds: [string, string, string],
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const circle = geometryCircumcircle2D(scene, pointIds);
+  if (!circle) return null;
+
+  const centerId = allocate('p');
+  const center = point2D(centerId, circle.center, { hidden: true, locked: true });
+  const id = allocate('circle');
+  const entity: CircleEntity = {
+    id,
+    kind: 'circle',
+    centerId,
+    radius: circle.radius,
+    construction: { kind: 'circleThroughPoints', pointIds },
+  };
+  return { points: [center], entities: [entity], primaryId: id };
+}
+
+/** An infinite line through two existing points. */
+export function buildLineThroughPoints2D(
+  scene: GeometryScene,
+  firstPointId: string,
+  secondPointId: string,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const first = scene.points[firstPointId];
+  const second = scene.points[secondPointId];
+  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return null;
+
+  const equation = lineEquationFrom2DPoints(first, second);
+  if (!equation) return null;
+
+  const id = allocate('line');
+  const line: LineEntity = {
+    id,
+    kind: 'line',
+    pointIds: [firstPointId, secondPointId],
+    equation,
+    construction: { kind: 'lineThroughPoints', sourceIds: [firstPointId, secondPointId] },
+  };
+  return { points: [], entities: [line], primaryId: id };
+}
+
+/**
+ * Builds the image of a point or an entity under a transformation.
+ *
+ * <p>Transforming a whole object is the operation a lesson actually asks for -
+ * "reflect this triangle in that line" - so an entity produces an image point
+ * per vertex, each individually constructed, plus a matching entity joining
+ * them. Every image point follows both its own source vertex and the
+ * transformation's defining objects, so dragging the mirror drags the whole
+ * reflected triangle.
+ */
+export function buildTransformedObject2D(
+  scene: GeometryScene,
+  targetId: string,
+  transform: GeometryTransform2D,
+  allocate: GeometryIdAllocator,
+): GeometryConstructionResult | null {
+  const imageOf = (sourceId: string): GeometryPoint2D | null => {
+    const source = scene.points[sourceId];
+    if (!isGeometryPoint2D(source)) return null;
+    const position = applyGeometryTransform2D(scene, transform, source);
+    if (!position) return null;
+    return point2D(allocate('p'), position, {
+      construction: { kind: 'transformedPoint', sourceId, transform },
+    });
+  };
+
+  const targetPoint = scene.points[targetId];
+  if (isGeometryPoint2D(targetPoint)) {
+    const image = imageOf(targetId);
+    return image ? { points: [image], entities: [], primaryId: image.id } : null;
+  }
+
+  const entity = scene.entities[targetId];
+  if (!entity) return null;
+
+  // Only entities defined purely by their vertices can be transformed this way.
+  // A circle carries a radius and a conic its own sampled points, so each would
+  // need its own rule rather than a vertex mapping.
+  if (!('pointIds' in entity) || entity.pointIds.length === 0) return null;
+  if (entity.kind !== 'segment' && entity.kind !== 'ray' && entity.kind !== 'vector' && entity.kind !== 'polygon') {
+    return null;
+  }
+
+  const images: GeometryPoint2D[] = [];
+  for (const sourceId of entity.pointIds) {
+    const image = imageOf(sourceId);
+    if (!image) return null;
+    images.push(image);
+  }
+
+  const entityId = allocate(entity.kind === 'polygon' ? 'poly' : 'seg');
+  const imageEntity = {
+    ...entity,
+    id: entityId,
+    pointIds: entity.kind === 'polygon'
+      ? images.map(image => image.id)
+      : [images[0]?.id, images[1]?.id],
+  } as GeometryEntity;
+  // The image is a new object rather than a construction of the original
+  // entity: its vertices already carry the link, and duplicating it here would
+  // make the same dependency twice.
+  delete (imageEntity as { construction?: unknown }).construction;
+
+  return { points: images, entities: [imageEntity], primaryId: entityId };
+}
+
+/** Equation of any line-like 2D entity, or null when it has none. *//** Equation of any line-like 2D entity, or null when it has none. */
+export function geometryLineLikeEquation2D(
+  scene: GeometryScene,
+  entityId: string,
+): GeometryLineEquation | null {
+  const entity = scene.entities[entityId];
+  if (!entity) return null;
+  if (entity.kind === 'line' && entity.equation) return normalizeGeometryLineEquation(entity.equation);
+  if (entity.kind !== 'line' && entity.kind !== 'segment' && entity.kind !== 'ray' && entity.kind !== 'vector') {
+    return null;
+  }
+  const first = scene.points[entity.pointIds[0]];
+  const second = scene.points[entity.pointIds[1]];
+  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return null;
+  return lineEquationFrom2DPoints(first, second);
+}
+
+/**
+ * Whether a person can move this point.
+ *
+ * <p>A constructed point is not free - it goes where its rule sends it, and
+ * moving it would be undone by the next recomputation - and a locked point is
+ * pinned on purpose. The same rule decides what a drag may pick up and what a
+ * conjecture check may perturb, which is why it is written once.
+ */
+export function isFreeGeometryPoint2D(point: GeometryPoint | undefined): boolean {
+  if (!point || point.kind !== 'point2d') return false;
+  if (point.construction !== undefined) return false;
+  return point.locked !== true && Number.isFinite(point.x) && Number.isFinite(point.y);
 }
 
 /** Direct source ids for any point/entity in the scene. */
@@ -409,6 +1205,84 @@ export function geometryObjectDependencies(scene: GeometryScene, objectId: strin
   return uniqueStrings([
     ...geometryEntityPointIds(entity),
   ]);
+}
+
+/** Objects a transformation is defined by, which its images therefore depend on. */
+export function geometryTransform2DSourceIds(transform: GeometryTransform2D): string[] {
+  switch (transform.kind) {
+    case 'translate':
+      return [transform.vectorEntityId];
+    case 'translateBy':
+      return [];
+    case 'rotate':
+    case 'reflectPoint':
+    case 'dilate':
+      return [transform.centerPointId];
+    case 'reflectLine':
+      return [transform.lineEntityId];
+  }
+}
+
+/**
+ * Maps one point through a transformation, or null when the transformation's
+ * own defining objects are missing or degenerate.
+ */
+export function applyGeometryTransform2D(
+  scene: GeometryScene,
+  transform: GeometryTransform2D,
+  point: Vector2,
+): Vector2 | null {
+  if (transform.kind === 'translateBy') {
+    if (!Number.isFinite(transform.dx) || !Number.isFinite(transform.dy)) return null;
+    return { x: point.x + transform.dx, y: point.y + transform.dy };
+  }
+
+  if (transform.kind === 'translate') {
+    const entity = scene.entities[transform.vectorEntityId];
+    if (!entity || !('pointIds' in entity) || entity.pointIds.length < 2) return null;
+    const from = scene.points[entity.pointIds[0] as string];
+    const to = scene.points[entity.pointIds[1] as string];
+    if (!isGeometryPoint2D(from) || !isGeometryPoint2D(to)) return null;
+    return { x: point.x + (to.x - from.x), y: point.y + (to.y - from.y) };
+  }
+
+  if (transform.kind === 'reflectLine') {
+    const equation = geometryLineLikeEquation2D(scene, transform.lineEntityId);
+    if (!equation) return null;
+    // Reflection across `a x + b y + c = 0`, with the normal already unit
+    // length because the equation is normalized on the way in.
+    const magnitudeSquared = equation.a * equation.a + equation.b * equation.b;
+    if (magnitudeSquared <= 1e-18) return null;
+    const signedDistance = (equation.a * point.x + equation.b * point.y + equation.c) / magnitudeSquared;
+    return {
+      x: point.x - 2 * equation.a * signedDistance,
+      y: point.y - 2 * equation.b * signedDistance,
+    };
+  }
+
+  const centre = scene.points[transform.centerPointId];
+  if (!isGeometryPoint2D(centre)) return null;
+  const dx = point.x - centre.x;
+  const dy = point.y - centre.y;
+
+  if (transform.kind === 'reflectPoint') {
+    // A half turn: the centre is the midpoint of a point and its image.
+    return { x: centre.x - dx, y: centre.y - dy };
+  }
+
+  if (transform.kind === 'dilate') {
+    if (!Number.isFinite(transform.factor) || transform.factor === 0) return null;
+    return { x: centre.x + dx * transform.factor, y: centre.y + dy * transform.factor };
+  }
+
+  if (!Number.isFinite(transform.degrees)) return null;
+  const radians = (transform.degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return {
+    x: centre.x + dx * cos - dy * sin,
+    y: centre.y + dx * sin + dy * cos,
+  };
 }
 
 /** Source object ids referenced by a serializable constraint. */
@@ -703,7 +1577,7 @@ export function summarizeGeometryObjects(
   scene: GeometryScene,
   options: GeometryObjectSummaryOptions = {},
 ): GeometryObjectSummary[] {
-  const graph = buildGeometryDependencyGraph(scene);
+  const graph = cachedGeometryDependencyGraph(scene);
   const result: GeometryObjectSummary[] = [];
 
   for (const point of Object.values(scene.points)) {
@@ -777,6 +1651,32 @@ export function summarizeGeometryConstraints(scene: GeometryScene): GeometryCons
 
 /** Builds a dependency graph for the whole scene. */
 export function buildGeometryDependencyGraph(scene: GeometryScene): GeometryDependencyGraph {
+  // Public callers receive their own graph. The instrument hands this straight
+  // out to hosts, which are free to mutate what they are given, so the shared
+  // cache below is never exposed.
+  return computeGeometryDependencyGraph(scene);
+}
+
+/**
+ * Graphs keyed by the exact scene object they describe.
+ *
+ * <p>Keyed by identity, so it cannot go stale: any edit produces a new scene
+ * object, which is a new key and a fresh build. What it saves is the repeated
+ * build within one scene - an object panel asking for summaries, then rows,
+ * then a delete plan, all against the same snapshot, used to rebuild the whole
+ * graph each time.
+ */
+const geometryDependencyGraphCache = new WeakMap<GeometryScene, GeometryDependencyGraph>();
+
+function cachedGeometryDependencyGraph(scene: GeometryScene): GeometryDependencyGraph {
+  const cached = geometryDependencyGraphCache.get(scene);
+  if (cached) return cached;
+  const graph = computeGeometryDependencyGraph(scene);
+  geometryDependencyGraphCache.set(scene, graph);
+  return graph;
+}
+
+function computeGeometryDependencyGraph(scene: GeometryScene): GeometryDependencyGraph {
   const dependenciesById: Record<string, string[]> = {};
   const dependentsById: Record<string, string[]> = {};
   const ids = [
@@ -786,16 +1686,21 @@ export function buildGeometryDependencyGraph(scene: GeometryScene): GeometryDepe
   ];
 
   for (const id of ids) {
-    const dependencies = geometryObjectDependencies(scene, id).filter(sourceId => sourceId !== id);
-    dependenciesById[id] = dependencies;
-    for (const sourceId of dependencies) {
-      const existing = dependentsById[sourceId] ?? [];
-      if (!existing.includes(id)) dependentsById[sourceId] = [...existing, id];
-    }
+    dependentsById[id] = [];
   }
 
   for (const id of ids) {
-    dependentsById[id] ??= [];
+    const dependencies = geometryObjectDependencies(scene, id).filter(sourceId => sourceId !== id);
+    dependenciesById[id] = dependencies;
+    for (const sourceId of dependencies) {
+      // Pushed rather than rebuilt. This used to be `includes` followed by
+      // `[...existing, id]`, which is O(d) time and a fresh array per edge, so
+      // O(d^2) on a heavily depended-on object - the shape a dragged control
+      // point has. The scan was also redundant: an object's dependency list is
+      // already unique, and each id is visited once, so the same edge cannot
+      // be offered twice.
+      (dependentsById[sourceId] ??= []).push(id);
+    }
   }
 
   return { dependenciesById, dependentsById };
@@ -803,13 +1708,14 @@ export function buildGeometryDependencyGraph(scene: GeometryScene): GeometryDepe
 
 /** Returns all transitively dependent ids for a set of changed source ids. */
 export function geometryDependentsOf(scene: GeometryScene, changedIds: Iterable<string>): string[] {
-  const graph = buildGeometryDependencyGraph(scene);
+  const graph = cachedGeometryDependencyGraph(scene);
   const visited = new Set<string>();
-  const queue = [...changedIds];
-
-  while (queue.length > 0) {
-    const id = queue.shift();
-    if (!id) continue;
+  // A cursor rather than `shift()`, which is O(n) on an array and made this
+  // traversal quadratic in the number of dependents it walked.
+  const queue: string[] = [...changedIds];
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const id = queue[cursor];
+    if (id === undefined) continue;
     for (const dependentId of graph.dependentsById[id] ?? []) {
       if (visited.has(dependentId)) continue;
       visited.add(dependentId);
@@ -818,6 +1724,165 @@ export function geometryDependentsOf(scene: GeometryScene, changedIds: Iterable<
   }
 
   return [...visited];
+}
+
+/**
+ * The most samples one locus will take, so a figure cannot make an edit
+ * unaffordable by asking for a smooth curve.
+ */
+export const MAX_LOCUS_SAMPLES = 256;
+
+/**
+ * Sweeps the driver and records where the tracer goes.
+ *
+ * <p><b>Only the tracer's own chain is recomputed, not the scene.</b> A locus is
+ * dozens of recomputations inside one edit, so doing them over the whole figure
+ * would make a five-hundred-object scene unusable the moment a locus was added
+ * to it. Scoped recomputation was measured as *slower* than a full pass for an
+ * ordinary edit and rejected on that evidence (task 0.3); this is the case it
+ * was actually right for, and the difference is which way the sizes point - a
+ * whole scene recomputed sixty-four times against a handful of objects
+ * recomputed sixty-four times.
+ *
+ * <p>Samples are taken on a copy, so nothing the sweep does to the driver
+ * survives it: the figure is left showing the configuration the student left it
+ * in, with the curve of all the others drawn through it.
+ */
+function recomputeDynamicLocus<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: LocusEntity,
+  construction: { sliderId: string; tracerId: string; samples: number },
+): void {
+  const scene = draft.scene;
+  const slider = scene.sliders?.[construction.sliderId];
+  const tracer = scene.points[construction.tracerId];
+  if (!slider || !isGeometryPoint2D(tracer)) return;
+
+  const samples = Math.max(2, Math.min(MAX_LOCUS_SAMPLES, Math.floor(construction.samples)));
+  const span = slider.max - slider.min;
+  if (!Number.isFinite(span)) return;
+
+  // Loci are taken out of the scene the sweep runs over. Without that a locus
+  // would be recomputed by its own sampling - it depends on the slider, so it
+  // is one of the slider's dependents - and recur until the stack gave out.
+  // Taking them out also stops one locus paying for every other one, which
+  // would be quadratic in the number of curves on the figure.
+  const entities: Record<string, GeometryEntity> = {};
+  for (const [id, other] of Object.entries(scene.entities)) {
+    if (other.kind === 'locus' && other.construction?.kind === 'dynamicLocus') continue;
+    entities[id] = other;
+  }
+  const base = { ...scene, entities };
+
+  // The chain is worked out once and reused for every sample. Rebuilding the
+  // dependency graph per sample - which handing a fresh scene to
+  // `recomputeGeometryDependents` would do - is the cost this scoping exists to
+  // avoid, sixty-four times over.
+  const chain = geometryDependentsOf(base, [slider.id]);
+
+  const points: Vector2[] = [];
+  for (let step = 0; step < samples; step += 1) {
+    const value = slider.min + (span * step) / (samples - 1);
+    const swept = recomputeGeometryObjects(
+      { ...base, sliders: { ...scene.sliders, [slider.id]: { ...slider, value } } },
+      chain,
+    );
+    const at = swept.points[construction.tracerId];
+    if (!isGeometryPoint2D(at) || !Number.isFinite(at.x) || !Number.isFinite(at.y)) continue;
+    points.push({ x: at.x, y: at.y });
+  }
+
+  if (points.length === entity.points.length
+    && points.every((point, index) => nearlyEqual(point.x, (entity.points[index] as Vector2).x)
+      && nearlyEqual(point.y, (entity.points[index] as Vector2).y))) {
+    return;
+  }
+  setGeometryDraftEntity(draft, { ...entity, points });
+}
+
+/**
+ * Where a point sits along an object.
+ *
+ * <p>`at` runs from 0 to 1 over the object as drawn, so one number describes a
+ * position on any of them - and what falls outside that range is decided by
+ * what the object *is* rather than by a blanket rule. A circle wraps, because
+ * three-quarters of the way round twice is three-quarters of the way round. A
+ * segment or a polygon clamps, because it has ends. A line or a ray is
+ * unbounded, so the parameter runs past its two defining points and the point
+ * keeps going, which is the only reading that lets a slider sweep one.
+ */
+export function geometryPointOnPath2D(
+  scene: GeometryScene,
+  construction: { entityId: string; at: number; sliderId?: string },
+): Vector2 | null {
+  const entity = scene.entities[construction.entityId];
+  if (!entity) return null;
+
+  // A slider's value *is* the parameter rather than being rescaled into one:
+  // an author who wants a full sweep gives it the range 0 to 1, and one who
+  // wants half a circle says so. Rescaling would make the same slider mean
+  // different things on different paths.
+  const slider = construction.sliderId === undefined
+    ? undefined
+    : scene.sliders?.[construction.sliderId];
+  const raw = slider ? slider.value : construction.at;
+  if (!Number.isFinite(raw)) return null;
+
+  if (entity.kind === 'circle') {
+    const centre = scene.points[entity.centerId];
+    if (!isGeometryPoint2D(centre) || !(entity.radius > 0)) return null;
+    const angle = (raw - Math.floor(raw)) * Math.PI * 2;
+    return { x: centre.x + Math.cos(angle) * entity.radius, y: centre.y + Math.sin(angle) * entity.radius };
+  }
+
+  if (entity.kind === 'polygon') {
+    const corners = entity.pointIds.map((id) => scene.points[id]).filter(isGeometryPoint2D);
+    if (corners.length !== entity.pointIds.length || corners.length < 3) return null;
+    return alongPolyline(corners, clamp01(raw), true);
+  }
+
+  if (entity.kind === 'segment' || entity.kind === 'vector' || entity.kind === 'line' || entity.kind === 'ray') {
+    const from = scene.points[entity.pointIds[0]];
+    const to = scene.points[entity.pointIds[1]];
+    if (!isGeometryPoint2D(from) || !isGeometryPoint2D(to)) return null;
+    const bounded = entity.kind === 'segment' || entity.kind === 'vector';
+    const t = bounded ? clamp01(raw) : (entity.kind === 'ray' ? Math.max(0, raw) : raw);
+    return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+  }
+
+  return null;
+}
+
+/** A position a fraction of the way along a run of points, by arc length. */
+function alongPolyline(points: readonly Vector2[], at: number, closed: boolean): Vector2 | null {
+  const count = closed ? points.length : points.length - 1;
+  const lengths: number[] = [];
+  let total = 0;
+  for (let index = 0; index < count; index += 1) {
+    const from = points[index] as Vector2;
+    const to = points[(index + 1) % points.length] as Vector2;
+    const length = Math.hypot(to.x - from.x, to.y - from.y);
+    lengths.push(length);
+    total += length;
+  }
+  if (total < 1e-12) return { x: (points[0] as Vector2).x, y: (points[0] as Vector2).y };
+
+  let travelled = at * total;
+  for (let index = 0; index < count; index += 1) {
+    const length = lengths[index] as number;
+    if (travelled <= length || index === count - 1) {
+      const from = points[index] as Vector2;
+      const to = points[(index + 1) % points.length] as Vector2;
+      const t = length < 1e-12 ? 0 : Math.min(1, travelled / length);
+      return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+    }
+    travelled -= length;
+  }
+  return null;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
 }
 
 /** Recomputes every supported derived object in dependency order. */
@@ -831,112 +1896,202 @@ export function recomputeGeometryDependents<T extends GeometryScene>(scene: T, c
   return recomputeGeometryObjects(scene, ids);
 }
 
+/**
+ * Working state for one recompute pass.
+ *
+ * <p>A recompute walk used to rebuild the scene once per object it moved:
+ * every writer returned `{ ...scene, points: { ...scene.points, [id]: next } }`,
+ * so moving k derived points in a scene of N copied N entries k times. On the
+ * shape that matters - many derived objects driven by one dragged source - that
+ * is quadratic, and it was the largest single cost on the drag path.
+ *
+ * <p>So the pass keeps one draft instead. It holds the original scene until the
+ * first actual write, at which point it takes a single shallow copy and mutates
+ * that from then on. Two properties fall out, and both are relied on elsewhere:
+ * a pass that changes nothing allocates nothing and returns the very same
+ * object it was given, so callers comparing by identity still see "unchanged";
+ * and a pass that changes anything costs one copy rather than k.
+ *
+ * <p>The draft is never exposed. It is created and consumed inside
+ * `recomputeGeometryObjects`, and the scene handed back out is not mutated
+ * again after that function returns, so callers keep the immutable snapshot
+ * semantics they had before.
+ */
+interface GeometryRecomputeDraft<T extends GeometryScene> {
+  scene: T;
+  changed: boolean;
+}
+
+/**
+ * Takes the pass's single copy, the first time something is actually written.
+ * Both records are copied together: a writer that touches a point and an entity
+ * in one step would otherwise copy at two different moments and leave the draft
+ * half-shared.
+ */
+function makeGeometryDraftWritable<T extends GeometryScene>(draft: GeometryRecomputeDraft<T>): void {
+  if (draft.changed) return;
+  draft.scene = {
+    ...draft.scene,
+    points: { ...draft.scene.points },
+    entities: { ...draft.scene.entities },
+  };
+  draft.changed = true;
+}
+
+function setGeometryDraftPoint<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  point: GeometryPoint,
+): void {
+  makeGeometryDraftWritable(draft);
+  draft.scene.points[point.id] = point;
+}
+
+function setGeometryDraftEntity<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: GeometryEntity,
+): void {
+  makeGeometryDraftWritable(draft);
+  draft.scene.entities[entity.id] = entity;
+}
+
 function recomputeGeometryObjects<T extends GeometryScene>(scene: T, objectIds: Iterable<string>): T {
-  let next: T = scene;
+  const draft: GeometryRecomputeDraft<T> = { scene, changed: false };
   const done = new Set<string>();
   const active = new Set<string>();
 
   const visit = (id: string): void => {
     if (done.has(id) || active.has(id)) return;
     active.add(id);
-    for (const dependencyId of geometryObjectDependencies(next, id)) {
+    // Dependencies are read from the draft's current scene, so an object still
+    // sees sources recomputed earlier in this same walk.
+    for (const dependencyId of geometryObjectDependencies(draft.scene, id)) {
       visit(dependencyId);
     }
     active.delete(id);
-    next = recomputeGeometryObject(next, id);
+    recomputeGeometryObject(draft, id);
     done.add(id);
   };
 
   for (const id of objectIds) visit(id);
-  return next;
+  return draft.scene;
 }
 
-function recomputeGeometryObject<T extends GeometryScene>(scene: T, objectId: string): T {
-  const point = scene.points[objectId];
-  if (point) return recomputeGeometryPoint(scene, point);
+function recomputeGeometryObject<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  objectId: string,
+): void {
+  const point = draft.scene.points[objectId];
+  if (point) {
+    recomputeGeometryPoint(draft, point);
+    return;
+  }
 
-  const entity = scene.entities[objectId];
-  if (entity) return recomputeGeometryEntity(scene, entity);
-
-  return scene;
+  const entity = draft.scene.entities[objectId];
+  if (entity) recomputeGeometryEntity(draft, entity);
 }
 
-function recomputeGeometryPoint<T extends GeometryScene>(scene: T, point: GeometryPoint): T {
-  if (point.kind !== 'point2d') return scene;
-  if (!point.construction) return scene;
+function recomputeGeometryPoint<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  point: GeometryPoint,
+): void {
+  if (point.kind !== 'point2d') return;
+  if (!point.construction) return;
+
+  const scene = draft.scene;
 
   if (point.construction.kind === 'intersection') {
     const [firstId, secondId] = point.construction.sourceIds;
     const nextPosition = geometryIntersectionPoint2D(scene, firstId, secondId, point.construction.index ?? 0);
-    if (!nextPosition) return scene;
-    return updateGeometryPointPosition(scene, point, nextPosition);
+    if (!nextPosition) return;
+    updateGeometryPointPosition(draft, point, nextPosition);
+    return;
+  }
+
+  if (point.construction.kind === 'pointOnPath') {
+    const nextPosition = geometryPointOnPath2D(scene, point.construction);
+    if (!nextPosition) return;
+    updateGeometryPointPosition(draft, point, nextPosition);
+    return;
   }
 
   if (point.construction.kind === 'circumcenter') {
     const circle = geometryCircumcircle2D(scene, point.construction.pointIds);
-    return circle ? updateGeometryPointPosition(scene, point, circle.center) : scene;
+    if (circle) updateGeometryPointPosition(draft, point, circle.center);
+    return;
   }
 
-  if (point.construction.kind !== 'midpoint') return scene;
+  if (point.construction.kind === 'transformedPoint') {
+    const { sourceId, transform } = point.construction;
+    const source = scene.points[sourceId];
+    if (!isGeometryPoint2D(source)) return;
+    const image = applyGeometryTransform2D(scene, transform, source);
+    if (image) updateGeometryPointPosition(draft, point, image);
+    return;
+  }
+
+  if (point.construction.kind !== 'midpoint') return;
 
   const [firstId, secondId] = point.construction.sourceIds;
   const first = scene.points[firstId];
   const second = scene.points[secondId];
-  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return scene;
+  if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return;
 
-  return updateGeometryPointPosition(scene, point, midpoint2D(first, second));
+  updateGeometryPointPosition(draft, point, midpoint2D(first, second));
 }
 
-function recomputeGeometryEntity<T extends GeometryScene>(scene: T, entity: GeometryEntity): T {
+function recomputeGeometryEntity<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: GeometryEntity,
+): void {
+  const scene = draft.scene;
+
+  if (entity.kind === 'locus' && entity.construction?.kind === 'dynamicLocus') {
+    recomputeDynamicLocus(draft, entity, entity.construction);
+    return;
+  }
+
   if (entity.kind === 'line') {
     if (entity.construction?.kind === 'angleBisector') {
-      return recomputeAngleBisectorLine(scene, entity);
+      recomputeAngleBisectorLine(draft, entity);
+      return;
     }
 
     if (entity.construction?.kind === 'tangentLine') {
-      return recomputeTangentLine(scene, entity);
+      recomputeTangentLine(draft, entity);
+      return;
     }
 
     if (entity.construction?.kind === 'parallelLine' || entity.construction?.kind === 'perpendicularLine') {
-      return recomputeConstructedLine(scene, entity);
+      recomputeConstructedLine(draft, entity);
+      return;
     }
 
     const [firstId, secondId] = entity.pointIds;
     const first = scene.points[firstId];
     const second = scene.points[secondId];
-    if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return scene;
+    if (!isGeometryPoint2D(first) || !isGeometryPoint2D(second)) return;
 
     const equation = lineEquationFrom2DPoints(first, second);
-    if (!equation || sameLineEquation(entity.equation, equation)) return scene;
-    return {
-      ...scene,
-      entities: {
-        ...scene.entities,
-        [entity.id]: { ...entity, equation },
-      },
-    };
+    if (!equation || sameLineEquation(entity.equation, equation)) return;
+    setGeometryDraftEntity(draft, { ...entity, equation });
+    return;
   }
 
   if (entity.kind === 'circle' && entity.construction?.kind === 'circleCenterPoint') {
     const center = scene.points[entity.construction.centerPointId];
     const radiusPoint = scene.points[entity.construction.radiusPointId];
-    if (!isGeometryPoint2D(center) || !isGeometryPoint2D(radiusPoint)) return scene;
+    if (!isGeometryPoint2D(center) || !isGeometryPoint2D(radiusPoint)) return;
 
     const radius = distance2D(center, radiusPoint);
-    if (!Number.isFinite(radius) || radius <= 0 || nearlyEqual(entity.radius, radius)) return scene;
-    return {
-      ...scene,
-      entities: {
-        ...scene.entities,
-        [entity.id]: { ...entity, centerId: center.id, radius },
-      },
-    };
+    if (!Number.isFinite(radius) || radius <= 0 || nearlyEqual(entity.radius, radius)) return;
+    setGeometryDraftEntity(draft, { ...entity, centerId: center.id, radius });
+    return;
   }
 
   if (entity.kind === 'circle' && entity.construction?.kind === 'circleThroughPoints') {
     const circle = geometryCircumcircle2D(scene, entity.construction.pointIds);
     const center = scene.points[entity.centerId];
-    if (!circle || !isGeometryPoint2D(center)) return scene;
+    if (!circle || !isGeometryPoint2D(center)) return;
     const nextCenter = { ...center, x: circle.center.x, y: circle.center.y, hidden: true, locked: true };
     if (
       nearlyEqual(center.x, nextCenter.x)
@@ -945,37 +2100,30 @@ function recomputeGeometryEntity<T extends GeometryScene>(scene: T, entity: Geom
       && center.hidden === true
       && center.locked === true
     ) {
-      return scene;
+      return;
     }
-    return {
-      ...scene,
-      points: {
-        ...scene.points,
-        [center.id]: nextCenter,
-      },
-      entities: {
-        ...scene.entities,
-        [entity.id]: { ...entity, centerId: center.id, radius: circle.radius },
-      },
-    };
+    setGeometryDraftPoint(draft, nextCenter);
+    setGeometryDraftEntity(draft, { ...entity, centerId: center.id, radius: circle.radius });
   }
-
-  return scene;
 }
 
-function recomputeAngleBisectorLine<T extends GeometryScene>(scene: T, entity: LineEntity): T {
+function recomputeAngleBisectorLine<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: LineEntity,
+): void {
+  const scene = draft.scene;
   const construction = entity.construction;
-  if (construction?.kind !== 'angleBisector') return scene;
+  if (construction?.kind !== 'angleBisector') return;
 
   const vertex = scene.points[construction.pointIds[1]];
   const helper = scene.points[entity.pointIds[1]];
-  if (!isGeometryPoint2D(vertex) || !isGeometryPoint2D(helper)) return scene;
+  if (!isGeometryPoint2D(vertex) || !isGeometryPoint2D(helper)) return;
 
   const helperPosition = geometryAngleBisectorPoint2D(scene, construction.pointIds);
-  if (!helperPosition) return scene;
+  if (!helperPosition) return;
 
   const equation = lineEquationFrom2DPoints(vertex, helperPosition);
-  if (!equation) return scene;
+  if (!equation) return;
 
   const nextHelper = {
     ...helper,
@@ -998,29 +2146,24 @@ function recomputeAngleBisectorLine<T extends GeometryScene>(scene: T, entity: L
     && helper.hidden === true
     && helper.locked === true
   ) {
-    return scene;
+    return;
   }
 
-  return {
-    ...scene,
-    points: {
-      ...scene.points,
-      [helper.id]: nextHelper,
-    },
-    entities: {
-      ...scene.entities,
-      [entity.id]: nextEntity,
-    },
-  };
+  setGeometryDraftPoint(draft, nextHelper);
+  setGeometryDraftEntity(draft, nextEntity);
 }
 
-function recomputeTangentLine<T extends GeometryScene>(scene: T, entity: LineEntity): T {
+function recomputeTangentLine<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: LineEntity,
+): void {
+  const scene = draft.scene;
   const construction = entity.construction;
-  if (construction?.kind !== 'tangentLine') return scene;
+  if (construction?.kind !== 'tangentLine') return;
 
   const through = scene.points[construction.throughPointId];
   const helper = scene.points[entity.pointIds[1]];
-  if (!isGeometryPoint2D(through) || !isGeometryPoint2D(helper)) return scene;
+  if (!isGeometryPoint2D(through) || !isGeometryPoint2D(helper)) return;
 
   const helperPosition = geometryCircleTangentPoint2D(
     scene,
@@ -1028,10 +2171,10 @@ function recomputeTangentLine<T extends GeometryScene>(scene: T, entity: LineEnt
     construction.throughPointId,
     construction.branch,
   );
-  if (!helperPosition) return scene;
+  if (!helperPosition) return;
 
   const equation = lineEquationFrom2DPoints(through, helperPosition);
-  if (!equation) return scene;
+  if (!equation) return;
 
   const nextHelper = {
     ...helper,
@@ -1054,32 +2197,27 @@ function recomputeTangentLine<T extends GeometryScene>(scene: T, entity: LineEnt
     && helper.hidden === true
     && helper.locked === true
   ) {
-    return scene;
+    return;
   }
 
-  return {
-    ...scene,
-    points: {
-      ...scene.points,
-      [helper.id]: nextHelper,
-    },
-    entities: {
-      ...scene.entities,
-      [entity.id]: nextEntity,
-    },
-  };
+  setGeometryDraftPoint(draft, nextHelper);
+  setGeometryDraftEntity(draft, nextEntity);
 }
 
-function recomputeConstructedLine<T extends GeometryScene>(scene: T, entity: LineEntity): T {
+function recomputeConstructedLine<T extends GeometryScene>(
+  draft: GeometryRecomputeDraft<T>,
+  entity: LineEntity,
+): void {
+  const scene = draft.scene;
   const construction = entity.construction;
-  if (construction?.kind !== 'parallelLine' && construction?.kind !== 'perpendicularLine') return scene;
+  if (construction?.kind !== 'parallelLine' && construction?.kind !== 'perpendicularLine') return;
 
   const through = scene.points[construction.throughPointId];
   const helper = scene.points[entity.pointIds[1]];
-  if (!isGeometryPoint2D(through) || !isGeometryPoint2D(helper)) return scene;
+  if (!isGeometryPoint2D(through) || !isGeometryPoint2D(helper)) return;
 
   const sourceEquation = lineEquationForEntity(scene, scene.entities[construction.sourceLineId]);
-  if (!sourceEquation) return scene;
+  if (!sourceEquation) return;
 
   const equation = construction.kind === 'parallelLine'
     ? normalizeGeometryLineEquation({
@@ -1092,7 +2230,7 @@ function recomputeConstructedLine<T extends GeometryScene>(scene: T, entity: Lin
       b: sourceEquation.a,
       c: -((-sourceEquation.b) * through.x + sourceEquation.a * through.y),
     });
-  if (!equation) return scene;
+  if (!equation) return;
 
   const direction = normalizeVector2D({ x: equation.b, y: -equation.a }) ?? { x: 1, y: 0 };
   const nextHelper = {
@@ -1116,35 +2254,20 @@ function recomputeConstructedLine<T extends GeometryScene>(scene: T, entity: Lin
     && helper.hidden === true
     && helper.locked === true
   ) {
-    return scene;
+    return;
   }
 
-  return {
-    ...scene,
-    points: {
-      ...scene.points,
-      [helper.id]: nextHelper,
-    },
-    entities: {
-      ...scene.entities,
-      [entity.id]: nextEntity,
-    },
-  };
+  setGeometryDraftPoint(draft, nextHelper);
+  setGeometryDraftEntity(draft, nextEntity);
 }
 
 function updateGeometryPointPosition<T extends GeometryScene>(
-  scene: T,
+  draft: GeometryRecomputeDraft<T>,
   point: GeometryPoint2D,
   position: Vector2,
-): T {
-  if (nearlyEqual(point.x, position.x) && nearlyEqual(point.y, position.y)) return scene;
-  return {
-    ...scene,
-    points: {
-      ...scene.points,
-      [point.id]: { ...point, x: position.x, y: position.y },
-    },
-  };
+): void {
+  if (nearlyEqual(point.x, position.x) && nearlyEqual(point.y, position.y)) return;
+  setGeometryDraftPoint(draft, { ...point, x: position.x, y: position.y });
 }
 
 function orderedGeometryEntityIds(scene: GeometryScene, order: string[] | undefined): string[] {
@@ -1508,6 +2631,10 @@ function geometryConstructionKindLabel(kind: GeometryConstruction['kind']): stri
       return 'Circle through points';
     case 'parallelLine':
       return 'Parallel line';
+    case 'pointOnPath':
+      return 'Point on path';
+    case 'dynamicLocus':
+      return 'Locus';
     case 'perpendicularLine':
       return 'Perpendicular line';
     case 'tangentLine':
@@ -1516,6 +2643,12 @@ function geometryConstructionKindLabel(kind: GeometryConstruction['kind']): stri
       return 'Angle bisector';
     case 'angleFromLines':
       return 'Angle from lines';
+    case 'transformedPoint':
+      return 'Transformed point';
+    case 'linePlaneIntersection':
+      return 'Line-plane intersection';
+    case 'planePlaneIntersection':
+      return 'Plane-plane intersection';
     case 'custom':
       return 'Custom construction';
   }

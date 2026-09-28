@@ -1,3 +1,4 @@
+export * from './exact.js';
 import { KleinSdkError } from '../core/index.js';
 import type { JsonObject } from '../core/index.js';
 
