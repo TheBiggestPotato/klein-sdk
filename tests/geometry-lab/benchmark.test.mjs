@@ -26,6 +26,8 @@ import {
   build3DScene,
   compareToBaseline,
   growthExponent,
+  tolerancesForEnvironment,
+  timeGateApplies,
   measure,
   readBaseline,
   runBenchmarks,
@@ -233,7 +235,17 @@ test('tolerances leave time looser than heap, since only heap is deterministic',
 
 test('benchmarks show no regression against the committed baseline', { skip: skipReason() }, () => {
   const results = runBenchmarks();
-  const comparison = compareToBaseline(results, readBaseline());
+  // On the machine the baseline came from, time is gated too; anywhere else
+  // only the portable signals are, and the times are printed to be read.
+  const comparison = compareToBaseline(results, readBaseline(), tolerancesForEnvironment());
+  if (!timeGateApplies()) {
+    const drift = Object.entries(results.cases)
+      .map(([id, current]) => [id, current.normalizedTime, readBaseline().cases?.[id]?.normalizedTime])
+      .filter(([, , previous]) => previous > 0)
+      .map(([id, current, previous]) => `${id} ${(current / previous).toFixed(2)}x`)
+      .join(', ');
+    console.log(`time not gated here (CI); normalized drift vs baseline: ${drift}`);
+  }
 
   const detail = comparison.regressions
     .map(entry => `${entry.id} ${entry.metric}: ${entry.current} vs baseline ${entry.previous} (allowed ${entry.allowed})`

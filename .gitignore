@@ -5,3 +5,10 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Working documents are kept out of the repository.
+/docs/
+/GEOMETRY_LAB_PLAN.md
+/GEOGEBRA_V0_SDK_IMPLEMENTATION_PLAN.md
+/V0_DEPLOYMENT_CHECKLIST.md
+/GEOMETRY_LAB_EXERCISES.md
