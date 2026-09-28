@@ -14,10 +14,15 @@ No React, no DOM framework, no server: the package is plain ES modules with subp
 
 Every picture below was produced by the SDK alone — build a document through the API, ask it for SVG. [`examples/render-gallery.mjs`](examples/render-gallery.mjs) is the whole script; `npm run gallery` regenerates them.
 
-| Graphing calculator | Geometry Lab (3D) |
+| Geometry Lab (2D) | Geometry Lab (3D) |
 |---|---|
-| <img src="examples/gallery/graphing.svg" alt="Parabola, sine wave and a line through slider a, with points A and B on the x axis" width="440"> | <img src="examples/gallery/geometry-lab.svg" alt="A cube and a sphere on a saddle surface, isometric camera" width="440"> |
-| `addExpression('y = x^2 - 4')`, a slider `a` used by `y = a * x + 1`, two labelled points, `export({ format: 'svg' })`. | `addCube`, `addSphere`, `addSurfaceZ` with the saddle preset, `setCameraPreset('isometric')`, `renderGeometryLabSvg3D`. |
+| <img src="examples/gallery/geometry-lab-2d.svg" alt="Triangle ABC with its circumcircle and the median from C to the midpoint of AB" width="440"> | <img src="examples/gallery/geometry-lab.svg" alt="A cube and a sphere on a saddle surface, isometric camera" width="440"> |
+| A construction, not a drawing: `addCircleThroughPoints2D` and `addMidpoint2D` depend on A, B and C, so moving a vertex moves them. `renderGeometryLabSvg2D`. | `addCube`, `addSphere`, `addSurfaceZ` with the saddle preset, `setCameraPreset('isometric')`, `renderGeometryLabSvg3D`. |
+
+| Graphing calculator |
+|---|
+| <img src="examples/gallery/graphing.svg" alt="Parabola, sine wave and a line through slider a, with points A and B on the x axis" width="440"> |
+| `addExpression('y = x^2 - 4')`, a slider `a` used by `y = a * x + 1`, two labelled points, `export({ format: 'svg' })`. |
 
 | Whiteboard |
 |---|
@@ -29,7 +34,7 @@ Every picture below was produced by the SDK alone — build a document through t
 | Key | What it is | Also answers to | Collaboration |
 |---|---|---|---|
 | `graphing` | Expressions typed the way a student types them (`y = x^2 - 4`, `a * x + 1`), sliders, points, sampling, roots and intersections, JSON/SVG/CSV export | `geogebra-graphing`, `calculator-grafic` | yes |
-| `geometry-lab` | Points, segments, lines, polygons, circles and conics in 2D; points, segments, cubes, spheres, sampled `z = f(x, y)` and equation surfaces in 3D; measurements; camera presets; strict validation with complexity limits | `graphing-3d`, `geogebra-3d`, `geometrie-3d` | yes |
+| `geometry-lab` | A dynamic construction tool in the plane and in space: points, segments, lines, polygons, circles, conics, midpoints, intersections, parallels, perpendiculars and bisectors in 2D; solids, sampled `z = f(x, y)`, equation and implicit surfaces, work planes and cross-sections in 3D; transformations, constraints, sliders, traces and loci; exact and approximate measurements; SVG, LaTeX and PDF output; an exercise bank with marking and hints | `graphing-3d`, `geogebra-3d`, `geometrie-3d` | yes |
 | `scientific` | Deterministic expression evaluation with angle mode, precision and history | `geogebra-scientific`, `calculator-stiintific`, `calculator` | shared history only, when the host enables it |
 | `probability` | Distribution models, descriptive statistics, evaluation helpers, CSV export | `geogebra-probability`, `probabilitati-calc` | yes |
 | `whiteboard` | Strokes, shapes, lines, text, sticky notes, images, stamps, frames, templates and embedded calculator cards; presence and comments; frame export | `tabla` | yes |
@@ -38,22 +43,22 @@ Every picture below was produced by the SDK alone — build a document through t
 
 ## Install
 
-The package is not on npm. It ships as a tarball built from this repository, which is also how the Klein client consumes it (`vendor/klein-sdk-0.1.0.tgz`):
+The package is not on npm. It ships as a tarball built from this repository, which is also how the Klein client consumes it (`vendor/klein-sdk-0.2.0.tgz`):
 
 ```bash
 git clone https://github.com/TheBiggestPotato/klein-sdk.git
 cd klein-sdk
 npm ci
 npm run build
-npm pack            # → klein-sdk-0.1.0.tgz
+npm pack            # → klein-sdk-0.2.0.tgz
 ```
 
 ```bash
 # in your project
-npm install ../klein-sdk/klein-sdk-0.1.0.tgz
+npm install ../klein-sdk/klein-sdk-0.2.0.tgz
 ```
 
-CI attaches the same tarball to every run on `main` (the `klein-sdk-tarball` artifact), built from exactly the `dist/` the quality job tested. The package is ESM-only with type declarations; there is no runtime dependency.
+Released versions are tagged and carry the tarball on their [release page](https://github.com/TheBiggestPotato/klein-sdk/releases); CI also attaches one to every run on `main` (the `klein-sdk-tarball` artifact), built from exactly the `dist/` the quality job tested. The package is ESM-only with type declarations; there is no runtime dependency.
 
 ## Five minutes with the SDK
 
@@ -168,7 +173,71 @@ const stop = watchBrowserExamIntegrity(exam);            // fullscreen, visibili
 
 Exam mode is a *soft* policy: it gates SDK commands and records integrity events (`command-blocked`, `visibility-hidden`, `window-blurred`, `network-offline`, …) for the host to send on. It does not lock a device down, and it does not pretend to.
 
-### 6. Assessment items that cannot leak an answer
+### 6. Geometry Lab beyond drawing
+
+A construction carries its dependencies, so the figure can be examined rather than
+just displayed: what was built, what it establishes, whether it answers a question.
+
+```ts
+import {
+  createGeometryLab, describeGeometryLabFigure, geometryConstructionProtocol,
+  formatGeometryConstructionProtocol, detectGeometryConjectures,
+  GEOMETRY_EXERCISE_BANK, learnerGeometryExercise, markGeometryExercise, nextGeometryHint,
+} from 'klein-sdk/geometry-lab';
+
+const lab = createGeometryLab({ initialView: '2d' });
+const a = lab.addPoint2D({ x: -3, y: -2, label: 'A' });
+const b = lab.addPoint2D({ x: 3.5, y: -2, label: 'B' });
+const c = lab.addPoint2D({ x: 0.5, y: 3, label: 'C' });
+lab.addCircleThroughPoints2D([a, b, c]);          // moves when A, B or C moves
+lab.addSegment2D(c, lab.addMidpoint2D(a, b));     // the median
+
+describeGeometryLabFigure(lab.getSnapshot());     // prose for a screen reader
+formatGeometryConstructionProtocol(geometryConstructionProtocol(lab.getSnapshot()));
+detectGeometryConjectures(lab.getSnapshot());     // { invariant, coincidental, unsettled, … }
+```
+
+`describeGeometryLabFigure` is the figure in words — what is in it, how it was
+built, what it establishes — and the SVG carries the same text in `<title>` and
+`<desc>` with per-object roles, so a screen reader is not handed a blank canvas:
+
+```text
+A figure with 1 circle, 4 points, 1 polygon and 1 segment in the plane.
+
+How it was built:
+1. Place A at (-3, -2).
+…
+5. Draw circle 1, the circle through A, B and C.
+6. Construct M, the midpoint of A and B.
+7. Join C and M with segment mediana.
+```
+
+`detectGeometryConjectures` answers the same question the other way round: it
+moves the free points, keeps what survives (`invariant`), and reports what held
+only at the original coordinates (`coincidental`).
+
+Exercises are data, not code. The bank ships 24 of them; a learner's copy never
+carries the answer, marking says which criteria are met, and hints come one rung
+at a time:
+
+```ts
+const exercise = GEOMETRY_EXERCISE_BANK.find(item => item.id === 'triangle-detective')!;
+learnerGeometryExercise(exercise);                       // no target, no rubric
+markGeometryExercise(exercise, lab.getSnapshot());       // criteria met, missing, coincidental
+nextGeometryHint(exercise, lab.getSnapshot(), released); // { rung: 1, text: 'Isosceles means…' }
+```
+
+`markGeometryExercise` separates what was *constructed* from what merely *looks*
+true at these coordinates — a triangle that happens to be isosceles is not a
+triangle built to be isosceles — and returns the criteria, the points awarded,
+and the ones a person still has to judge.
+
+Output beyond SVG: `renderGeometryLabLatex` for a TikZ-style figure a document can
+typeset, `renderGeometryLabPdf` for a printable page, `unfoldSolidNet` and
+`foldSolidNet` for a solid's net and the animation between them, and
+`createGeometryKeyboardSession` for constructing without a pointer.
+
+### 7. Assessment items that cannot leak an answer
 
 `klein-sdk/assessment` is the versioned interchange contract for exercise and exam content: content blocks (text, LaTeX, first-party assets, PDF page references, media, code, tool starters), interactions (choice, boolean, text, numeric, expression, photo, tool snapshot, composite) and a **learner-safe item** DTO that is rejected if it carries answer keys, solutions, scoring rules, rubrics or feedback.
 
@@ -182,7 +251,7 @@ validateAssessmentResponseV1(response);         // { ok, issues }
 
 The fixtures under `fixtures/assessment/v1/` are the canonical examples; the Klein server's contract tests and the client's renderer tests both consume the same files.
 
-### 7. Theme and embedding
+### 8. Theme and embedding
 
 Palettes are host-owned and never saved into a snapshot or sent over collaboration:
 
@@ -221,7 +290,7 @@ Supported surface (v0):
 | `klein-sdk/tools` | `KLEIN_V0_TOOLS`, `createKleinToolRuntime`, `normalizeKleinToolKey`, `getKleinToolDefinition`, `isKleinToolKey`, `requireKleinToolKey` |
 | `klein-sdk/core` | The contracts everything implements: `KleinInstrument`, `KleinToolRuntime`, `DeltaMeta`, `ToolCommand`, `ValidationResult`, `KleinSdkError` |
 | `klein-sdk/graphing` | `createGraphingCalculator`, `createGraphingRuntime`, snapshot/delta validators, `parseGraphExpression`, `sampleGraphExpression`, `findGraphRoots`, `findGraphIntersections` |
-| `klein-sdk/geometry-lab` | `createGeometryLab`, `createGeometryLabRuntime`, validators, `parseGeometryLabSnapshotJson`, `compileEquationSurface3D`, `renderGeometryLabSvg3D`, complexity limits and preflight checks |
+| `klein-sdk/geometry-lab` | `createGeometryLab`, `createGeometryLabRuntime`, validators, `parseGeometryLabSnapshotJson`, `compileEquationSurface3D`, `compileImplicitSurface3D`, `renderGeometryLabSvg2D`/`Svg3D`/`Latex`/`Pdf`, `describeGeometryLabFigure`, `geometryConstructionProtocol`, `detectGeometryConjectures`, `checkGeometryGoal`, `GEOMETRY_EXERCISE_BANK` with `learnerGeometryExercise`, `markGeometryExercise`, `nextGeometryHint`, `unfoldSolidNet`/`foldSolidNet`, `createGeometryKeyboardSession`, complexity limits and preflight checks |
 | `klein-sdk/graphing-3d` | Compatibility facade over Geometry Lab for hosts that still launch `graphing-3d` |
 | `klein-sdk/scientific`, `klein-sdk/calculator` | `createScientificCalculator`, `createScientificCalculatorRuntime`, validators, `applyCalculatorDelta` |
 | `klein-sdk/probability` | `createProbabilityExplorer`, `createProbabilityRuntime`, validators, `evaluateDistributionModel` |
@@ -245,7 +314,16 @@ A few rules hold across the package; they are what make the tools composable.
 - **Deltas are the unit of change.** Every mutation — a command, a direct `applyDelta`, an undo — is emitted through `subscribeDelta` with a `DeltaMeta` naming its source (`local`, `remote`, `history`, `import`). Collaboration, autosave and audit all hang off that one stream.
 - **Hosts own the outside world.** Authentication, tickets, persistence, networking, theming, device lockdown: the SDK defines the contract and the host implements it. Nothing here stores a credential.
 - **Nothing carries an answer.** The assessment contract is designed so that what reaches a learner cannot contain the key, and the validators enforce it structurally rather than by convention.
+- **Performance is a gate, not a hope.** `npm run bench:geometry-lab` measures the
+  operations a lesson actually performs — dragging a point with dependents, a plane
+  with ten, a chain held by twenty constraints — against a committed baseline, and
+  `bench:geometry-lab:check` fails when one regresses.
 - **Rendering is a pure function of the snapshot.** SVG export is deterministic, which is why the gallery above can be regenerated and diffed.
+
+## Releases
+
+Versions and what changed in each are in [CHANGELOG.md](CHANGELOG.md); the tarball
+for a version is attached to its [release](https://github.com/TheBiggestPotato/klein-sdk/releases).
 
 ## Development
 
@@ -256,7 +334,7 @@ npm run build              # → dist/ (ESM + .d.ts)
 npm run test:ci            # typecheck, build, node --test suites, smoke scripts
 ```
 
-Focused suites: `npm run test:geometry-lab`, `test:assessment`, `test:collab`, `test:graphing`, `test:v0`. Tests live in `tests/` and run with Node's built-in runner against `dist/`; the smoke scripts in `scripts/` exercise the public entry points end to end.
+Focused suites: `npm run test:geometry-lab`, `test:assessment`, `test:collab`, `test:graphing`, `test:math`, `test:v0`. Benchmarks: `npm run bench:geometry-lab` (numbers now), `bench:geometry-lab:check` (against the committed baseline), `bench:geometry-lab:update`. Tests live in `tests/` and run with Node's built-in runner against `dist/`; the smoke scripts in `scripts/` exercise the public entry points end to end.
 
 CI (`.github/workflows/ci.yml`) runs `test:ci` and a dry `npm pack` on every push, Sonar when the secrets are present, and publishes the tarball artifact from `main` and tags.
 

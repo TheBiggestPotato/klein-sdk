@@ -1,6 +1,6 @@
 {
   "name": "klein-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-independent SDK for Klein classroom math tools.",
   "keywords": [
     "math",

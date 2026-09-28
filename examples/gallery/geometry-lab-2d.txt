@@ -1,0 +1,23 @@
+Klein Geometry Lab figure.
+
+A figure with 1 circle, 4 points, 1 polygon and 1 segment in the plane.
+
+How it was built:
+1. Place A at (-3, -2).
+2. Place B at (3.5, -2).
+3. Place C at (0.5, 3).
+4. Draw polygon polygon 1 on A, B and C.
+5. Draw circle 1, the circle through A, B and C.
+6. Construct M, the midpoint of A and B.
+7. Join C and M with segment mediana.
+
+What it establishes:
+- A, B and M lie on one line.
+- M is the midpoint of AB.
+- A lies on the circle centred on circle_3t4hsicojz6xd_9448f7f34ad04c4396ba94ef84127399_b.
+- B lies on the circle centred on circle_3t4hsicojz6xd_9448f7f34ad04c4396ba94ef84127399_b.
+- C lies on the circle centred on circle_3t4hsicojz6xd_9448f7f34ad04c4396ba94ef84127399_b.
+
+Measurements:
+- angle: 65.956 deg
+- distance: 13/2 (about 6.5) u

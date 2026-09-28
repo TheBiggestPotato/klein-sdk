@@ -11,7 +11,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createGraphingCalculator } from '../dist/graphing/index.js';
-import { createGeometryLabRuntime, renderGeometryLabSvg3D } from '../dist/geometry-lab/index.js';
+import {
+  createGeometryLab,
+  createGeometryLabRuntime,
+  describeGeometryLabFigure,
+  renderGeometryLabSvg2D,
+  renderGeometryLabSvg3D,
+} from '../dist/geometry-lab/index.js';
 import { createWhiteboard, exportWhiteboardSvg } from '../dist/whiteboard/index.js';
 
 const out = join(dirname(fileURLToPath(import.meta.url)), 'gallery');
@@ -29,6 +35,26 @@ graphing.addPoint(2, 0, { label: 'A' });
 graphing.addPoint(-2, 0, { label: 'B' });
 const graphingSvg = await graphing.export({ format: 'svg', width: 720, height: 440, includeGrid: true });
 writeFileSync(join(out, 'graphing.svg'), graphingSvg.data);
+
+// ── Geometry Lab (2D) ─────────────────────────────────────────────────────
+// A construction, not a drawing: the circumcircle is defined by the three
+// vertices, so moving one moves it. The measurements are read off the figure,
+// and the description is what a screen reader is given.
+const plane = createGeometryLab({ initialView: '2d' });
+const a = plane.addPoint2D({ x: -3, y: -2, label: 'A' });
+const b = plane.addPoint2D({ x: 3.5, y: -2, label: 'B' });
+const c = plane.addPoint2D({ x: 0.5, y: 3, label: 'C' });
+plane.addPolygon2D([a, b, c], { color: '#2563eb' });
+plane.addCircleThroughPoints2D([a, b, c], { color: '#d97706' });
+const midAB = plane.addMidpoint2D(a, b, { label: 'M' });
+plane.addSegment2D(c, midAB, { color: '#16a34a', label: 'mediana' });
+plane.addAngleMeasurement2D([a, c, b]);
+plane.addDistanceMeasurement2D(a, b);
+// The 2D view is host state: one unit is one pixel until the host says
+// otherwise, so the picture says how far it is zoomed in.
+plane.applyDelta({ op: 'setAppState', changes: { view2d: { x: 0.25, y: 0.35, zoom: 44 } } });
+writeFileSync(join(out, 'geometry-lab-2d.svg'), renderGeometryLabSvg2D(plane.getSnapshot(), { format: 'svg', width: 720, height: 440 }));
+writeFileSync(join(out, 'geometry-lab-2d.txt'), describeGeometryLabFigure(plane.getSnapshot()));
 
 // ── Geometry Lab (3D) ─────────────────────────────────────────────────────
 // The runtime is command-driven: a host sends commands, the runtime answers
@@ -56,4 +82,4 @@ add({ id: 'note', type: 'text', text: 'Înălțimea cade perpendicular pe bază.
 add({ id: 'ok', type: 'stamp', stamp: 'check', x: 620, y: 330, width: 40, height: 40, color: '#16a34a' });
 writeFileSync(join(out, 'whiteboard.svg'), exportWhiteboardSvg(board.getSnapshot(), { width: 720, height: 440 }));
 
-console.log(`Wrote ${out}/graphing.svg, geometry-lab.svg, whiteboard.svg`);
+console.log(`Wrote ${out}/graphing.svg, geometry-lab-2d.svg, geometry-lab.svg, whiteboard.svg`);
