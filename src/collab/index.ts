@@ -375,6 +375,7 @@ implements CollaborationTransport<TSnapshot, TDelta> {
   readonly displayName?: string;
   readonly color?: string;
   #hub: InMemoryCollaborationHub<TSnapshot, TDelta>;
+  #usesDefaultHub: boolean;
   #connected = false;
   #deltaHandlers = new Set<(delta: TDelta, meta: DeltaMeta) => void>();
   #snapshotHandlers = new Set<(snapshot: TSnapshot) => void>();
@@ -385,7 +386,13 @@ implements CollaborationTransport<TSnapshot, TDelta> {
     this.actorId = options.actorId;
     if (options.displayName !== undefined) this.displayName = options.displayName;
     if (options.color !== undefined) this.color = options.color;
-    this.#hub = options.hub ?? defaultHub<TSnapshot, TDelta>(options.roomId);
+    if (options.hub !== undefined) {
+      this.#hub = options.hub;
+      this.#usesDefaultHub = false;
+    } else {
+      this.#hub = defaultHub<TSnapshot, TDelta>(options.roomId);
+      this.#usesDefaultHub = true;
+    }
   }
 
   async connect(): Promise<void> {
@@ -400,6 +407,22 @@ implements CollaborationTransport<TSnapshot, TDelta> {
     this.sendPresence(this.#presence('offline'));
     this.#hub.leave(this.roomId, this);
     this.#connected = false;
+    this.#releaseDefaultHubIfEmpty();
+  }
+
+  /**
+   * A default hub is module-level state shared by every transport created
+   * without a hub of their own. Leaving the last participant in without
+   * releasing it keeps the room alive for the next suite or host that reuses
+   * the roomId — a leak that survives garbage collection. Host-provided hubs
+   * are owned by whoever passed them and are never released here.
+   */
+  #releaseDefaultHubIfEmpty(): void {
+    if (!this.#usesDefaultHub) return;
+    if (this.#hub.participantCount(this.roomId) > 0) return;
+    if (defaultHubs.get(this.roomId) === (this.#hub as InMemoryCollaborationHub<unknown, unknown>)) {
+      defaultHubs.delete(this.roomId);
+    }
   }
 
   sendDelta(delta: TDelta, meta: DeltaMeta): void {

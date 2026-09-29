@@ -358,10 +358,6 @@ export type {
   Graphing3DTool,
 } from './graphing-3d/index.js';
 
-export {
-  createAlgebraLab,
-  createEmptyAlgebraSnapshot,
-} from './algebra/index.js';
 export type {
   AlgebraAppState,
   AlgebraDelta,
@@ -445,10 +441,6 @@ export type {
   KleinToolDefinition,
 } from './tools/index.js';
 
-export {
-  createEmptySpreadsheetSnapshot,
-  createSpreadsheet,
-} from './spreadsheet/index.js';
 export type {
   SpreadsheetAppState,
   SpreadsheetCell,
@@ -459,10 +451,6 @@ export type {
   SpreadsheetTool,
 } from './spreadsheet/index.js';
 
-export {
-  createEmptyWorkspaceSnapshot,
-  createMathWorkspace,
-} from './workspace/index.js';
 export type {
   WorkspaceAppState,
   WorkspaceDelta,

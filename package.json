@@ -65,10 +65,6 @@
       "types": "./dist/graphing-3d/index.d.ts",
       "import": "./dist/graphing-3d/index.js"
     },
-    "./algebra": {
-      "types": "./dist/algebra/index.d.ts",
-      "import": "./dist/algebra/index.js"
-    },
     "./calculator": {
       "types": "./dist/calculator/index.d.ts",
       "import": "./dist/calculator/index.js"
@@ -84,14 +80,6 @@
     "./tools": {
       "types": "./dist/tools/index.d.ts",
       "import": "./dist/tools/index.js"
-    },
-    "./spreadsheet": {
-      "types": "./dist/spreadsheet/index.d.ts",
-      "import": "./dist/spreadsheet/index.js"
-    },
-    "./workspace": {
-      "types": "./dist/workspace/index.d.ts",
-      "import": "./dist/workspace/index.js"
     },
     "./classroom": {
       "types": "./dist/classroom/index.d.ts",

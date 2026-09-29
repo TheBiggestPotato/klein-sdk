@@ -39,11 +39,17 @@ Foundation exports that v0 tools use directly:
 - `klein-sdk/dom`
 - `klein-sdk/theme` - host-owned light/dark palette contracts for DOM tool renderers
 
-Exports present for development but not part of the v0 deployment promise:
+Not yet shipped as entrypoints. Their types stay available through the root
+import (`import type { AlgebraTool } from 'klein-sdk'`), and the source modules
+remain in `src/` for development, but there is no `klein-sdk/algebra`,
+`klein-sdk/spreadsheet`, or `klein-sdk/workspace` subpath and no factory in the
+root barrel: each tool's runtime still throws on use until the real tool
+exists, so the surface stays closed rather than shipping runtimes that fail
+when called.
 
-- `klein-sdk/algebra`
-- `klein-sdk/spreadsheet`
-- `klein-sdk/workspace`
+- algebra (types only, no entrypoint)
+- spreadsheet (types only, no entrypoint)
+- workspace (types only, no entrypoint)
 - classic/legacy GeoGebra-compatible shells
 
 ## Commands
